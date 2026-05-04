@@ -48,7 +48,7 @@ final class AppSettings: ObservableObject {
         return trimmedModel
     }
 
-    private static let useFasterWhisperKey = "useFasterWhisper"
+    private static let useFasterWhisperKey = "includeFasterWhisperInRace"
     private static let modelPathKey = "modelPath"
     private static let whisperCLIPathKey = "whisperCLIPath"
     private static let fasterWhisperModelKey = "fasterWhisperModel"
@@ -59,7 +59,7 @@ final class AppSettings: ObservableObject {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        useFasterWhisper = userDefaults.bool(forKey: Self.useFasterWhisperKey)
+        useFasterWhisper = userDefaults.object(forKey: Self.useFasterWhisperKey) as? Bool ?? true
         modelPath = userDefaults.string(forKey: Self.modelPathKey) ?? Self.defaultModelPath()
         whisperCLIPath = userDefaults.string(forKey: Self.whisperCLIPathKey) ?? Self.defaultWhisperCLIPath()
         fasterWhisperModel = userDefaults.string(forKey: Self.fasterWhisperModelKey) ?? AppPaths.defaultFasterWhisperModelName
@@ -68,6 +68,7 @@ final class AppSettings: ObservableObject {
     }
 
     func resetPathsToDefaults() {
+        useFasterWhisper = true
         modelPath = Self.defaultModelPath()
         whisperCLIPath = Self.defaultWhisperCLIPath()
         fasterWhisperModel = AppPaths.defaultFasterWhisperModelName

@@ -10,10 +10,10 @@ struct SettingsView: View {
                 .font(.title3.weight(.semibold))
 
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Use faster-whisper", isOn: $settings.useFasterWhisper)
+                Toggle("Include faster-whisper in the model race", isOn: $settings.useFasterWhisper)
                     .toggleStyle(.switch)
 
-                Text("Switches transcription from whisper.cpp to the Python faster-whisper package. Model can be a size like large-v3-turbo, a Hugging Face model ID, or a local CTranslate2 model folder.")
+                Text("After you stop recording, Custom STT runs whisper.cpp and faster-whisper in parallel so you can compare speed and output side by side.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -21,10 +21,11 @@ struct SettingsView: View {
 
             Divider()
 
+            whisperCppSettings
+
             if settings.useFasterWhisper {
+                Divider()
                 fasterWhisperSettings
-            } else {
-                whisperCppSettings
             }
 
             VStack(alignment: .leading, spacing: 6) {

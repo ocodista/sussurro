@@ -5,14 +5,14 @@ A small local macOS speech-to-text app:
 - SwiftUI floating recorder window that stays above other windows
 - live microphone waveform visualizer
 - Linear-inspired dark floating UI
-- local transcription through open-source `whisper.cpp` (`whisper-cli`)
-- optional `faster-whisper` backend with a Settings switch
+- parallel model race after each recording: `whisper.cpp` and optional `faster-whisper`
+- two side-by-side timer/result cards to compare speed and output
 - stop/cancel button while transcription is running
-- native macOS Settings window for backend, model, and executable paths
-- live and final transcription duration
+- native macOS Settings window for model and executable paths
+- live and final transcription duration per model
 - records audio to the standard macOS app data folder
-- writes the latest transcription command log to the standard macOS logs folder
-- copies each transcript to the clipboard after transcription
+- writes transcription command logs to the standard macOS logs folder
+- copies all transcripts, or one model's transcript, to the clipboard
 
 ## App data paths
 
@@ -24,15 +24,17 @@ The app uses macOS-standard user data locations instead of writing generated fil
 - Logs: `~/Library/Logs/CustomSTT/`
 - Caches: `~/Library/Caches/CustomSTT/`
 - Latest transcription log: `~/Library/Logs/CustomSTT/whisper-last.log`
+- Latest whisper.cpp log: `~/Library/Logs/CustomSTT/whisper-cpp-last.log`
+- Latest faster-whisper log: `~/Library/Logs/CustomSTT/faster-whisper-last.log`
 
 ## Installed pieces
 
-For whisper.cpp mode, this project expects:
+For whisper.cpp, this project expects:
 
 - `/opt/homebrew/bin/whisper-cli` from Homebrew `whisper-cpp`
 - a Whisper GGML model in `~/Library/Application Support/CustomSTT/Models/`
 
-For faster-whisper mode, this project expects:
+For faster-whisper comparison, this project expects:
 
 - an app-managed Python environment at `~/Library/Application Support/CustomSTT/faster-whisper-venv/`
 - a faster-whisper model name like `large-v3-turbo`, a Hugging Face model ID, or a local CTranslate2 model folder
@@ -91,25 +93,30 @@ GGML model choices for whisper.cpp:
 3. Press **Record**, space, or **⌘⌥M**.
 4. Speak.
 5. Press **Stop**, space, or **⌘⌥M**.
-6. Wait for transcription; the result appears in the text box and is copied to the clipboard.
+6. The app normalizes the audio once, then runs the configured models in parallel.
+7. Compare the side-by-side timer/result cards.
 
-Click the gear button or use **CustomSTT → Settings…** to edit paths and switch backends.
+Use **Copy all** to copy all completed model outputs, or **Copy** on a card to copy one result.
 
-To use faster-whisper:
+Click the gear button or use **CustomSTT → Settings…** to edit paths and include/exclude faster-whisper from the model race.
+
+To include faster-whisper:
 
 1. Run `scripts/install-faster-whisper.sh`.
 2. Open Settings.
-3. Turn on **Use faster-whisper**.
+3. Turn on **Include faster-whisper in the model race**.
 4. Keep model as `large-v3-turbo`, or set another faster-whisper model name, Hugging Face ID, or local CTranslate2 model folder.
 
 The selected faster-whisper model downloads on first transcription into `~/Library/Application Support/CustomSTT/Models/FasterWhisper/`. The first faster-whisper run can take longer while that model downloads; press **Stop** to cancel it.
 
 ## If transcription fails
 
-Open the latest command log:
+Open the latest command logs:
 
 ```bash
 cat "$HOME/Library/Logs/CustomSTT/whisper-last.log"
+cat "$HOME/Library/Logs/CustomSTT/whisper-cpp-last.log"
+cat "$HOME/Library/Logs/CustomSTT/faster-whisper-last.log"
 ```
 
 Common fixes:

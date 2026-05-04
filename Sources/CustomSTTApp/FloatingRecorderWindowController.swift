@@ -9,7 +9,7 @@ final class FloatingRecorderWindowController: NSWindowController {
         let contentView = RecorderView(recorder: recorder, transcriber: transcriber, settings: settings)
 
         let panel = FloatingRecorderPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 580),
             styleMask: [.titled, .fullSizeContentView, .resizable, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -21,7 +21,7 @@ final class FloatingRecorderWindowController: NSWindowController {
         panel.isMovableByWindowBackground = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.minSize = NSSize(width: 440, height: 360)
+        panel.minSize = NSSize(width: 680, height: 520)
         panel.contentView = NSHostingView(rootView: contentView)
         panel.center()
 
