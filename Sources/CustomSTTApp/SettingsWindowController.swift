@@ -18,6 +18,8 @@ final class SettingsWindowController: NSWindowController {
         )
         window.title = "Custom STT Settings"
         window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.contentView = NSHostingView(rootView: SettingsView(settings: settings))
         window.center()
 
@@ -34,8 +36,9 @@ final class SettingsWindowController: NSWindowController {
             window?.center()
         }
 
+        NSApplication.shared.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        window?.orderFrontRegardless()
     }
 }
