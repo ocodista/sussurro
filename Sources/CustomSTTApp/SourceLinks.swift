@@ -29,6 +29,7 @@ struct SourceLinkButton: View {
                 )
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .help(help)
     }
 

@@ -25,16 +25,19 @@ struct SettingsView: View {
                 Button("Open App Data") {
                     NSWorkspace.shared.open(AppPaths.applicationSupportDirectory)
                 }
+                .pointingHandCursor()
 
                 Button("Open Logs") {
                     NSWorkspace.shared.open(AppPaths.logsDirectory)
                 }
+                .pointingHandCursor()
 
                 Spacer()
 
                 Button("Reset Paths") {
                     settings.resetPathsToDefaults()
                 }
+                .pointingHandCursor()
             }
 
             Text("Tip: run scripts/download-model.sh turbo to install a local open-source Whisper model in the standard macOS app data folder.")

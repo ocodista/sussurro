@@ -64,6 +64,7 @@ struct RecorderView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
         }
     }
 
@@ -85,6 +86,7 @@ struct RecorderView: View {
             .keyboardShortcut(.space, modifiers: [])
             .disabled(transcriber.isStoppingTranscription)
             .opacity(transcriber.isStoppingTranscription ? 0.55 : 1)
+            .pointingHandCursor(!transcriber.isStoppingTranscription)
 
             Text(timingText)
                 .font(.system(.caption, design: .monospaced).weight(.medium))
@@ -97,6 +99,7 @@ struct RecorderView: View {
             }
             .buttonStyle(MinimalButtonStyle())
             .disabled(transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .pointingHandCursor(!transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Button("Clear") {
                 transcriber.clearTranscript()
@@ -104,6 +107,7 @@ struct RecorderView: View {
             }
             .buttonStyle(MinimalButtonStyle())
             .disabled(transcriber.transcript.isEmpty && transcriber.errorMessage == nil)
+            .pointingHandCursor(!(transcriber.transcript.isEmpty && transcriber.errorMessage == nil))
         }
     }
 
