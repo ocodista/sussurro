@@ -147,6 +147,10 @@ struct RecorderView: View {
 
                 Spacer()
 
+                if let detectedLanguageDisplay = transcriber.detectedLanguageDisplay {
+                    languagePill(detectedLanguageDisplay)
+                }
+
                 statusPill
             }
 
@@ -184,6 +188,15 @@ struct RecorderView: View {
                 .stroke(Color(red: 0.72, green: 0.50, blue: 1.0).opacity(transcriber.status.isActive ? 0.34 : 0.16), lineWidth: 1)
         )
         .shadow(color: Color(red: 0.72, green: 0.50, blue: 1.0).opacity(transcriber.status.isActive ? 0.16 : 0.06), radius: 18, y: 8)
+    }
+
+    private func languagePill(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.70))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
     }
 
     private var statusPill: some View {

@@ -25,6 +25,7 @@ final class WhisperTranscriber: ObservableObject {
     @Published private(set) var isStoppingTranscription = false
     @Published private(set) var status: TranscriptionStatus = .idle
     @Published private(set) var transcriptionStartedAt: Date?
+    @Published private(set) var detectedLanguageCode: String?
     @Published var transcript = ""
     @Published var errorMessage: String?
     @Published private(set) var currentTranscriptionElapsed: TimeInterval = 0
@@ -44,6 +45,12 @@ final class WhisperTranscriber: ObservableObject {
         return URL(fileURLWithPath: modelPath).lastPathComponent
     }
 
+    var detectedLanguageDisplay: String? {
+        guard let detectedLanguageCode else { return nil }
+        let languageName = Locale.current.localizedString(forLanguageCode: detectedLanguageCode) ?? detectedLanguageCode.uppercased()
+        return "\(detectedLanguageCode.uppercased()) · \(languageName.capitalized)"
+    }
+
     func transcribe(audioURL: URL) async -> Bool {
         guard !isTranscribing else { return false }
         guard let request = makeWhisperRequest() else { return false }
@@ -56,6 +63,7 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionStartedAt = startedAt
         currentTranscriptionElapsed = 0
         lastTranscriptionDuration = nil
+        detectedLanguageCode = nil
         errorMessage = nil
         startTranscriptionTimer(startedAt: startedAt)
         defer {
@@ -83,7 +91,8 @@ final class WhisperTranscriber: ObservableObject {
                 try Self.runWhisper(audioURL: normalizedAudioURL, request: request, processController: self.processController)
             }.value
 
-            transcript = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            detectedLanguageCode = result.languageCode
+            transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             status = .completed
             return !transcript.isEmpty
         } catch TranscriptionCancellation.cancelled {
@@ -120,6 +129,7 @@ final class WhisperTranscriber: ObservableObject {
         errorMessage = nil
         lastTranscriptionDuration = nil
         currentTranscriptionElapsed = 0
+        detectedLanguageCode = nil
         transcriptionStartedAt = nil
         status = .idle
     }
@@ -166,9 +176,12 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionTimer = nil
     }
 
-    nonisolated private static func runWhisper(audioURL: URL, request: WhisperRequest, processController: TranscriptionProcessController) throws -> String {
+    nonisolated private static func runWhisper(audioURL: URL, request: WhisperRequest, processController: TranscriptionProcessController) throws -> WhisperResult {
         let executableURL = URL(fileURLWithPath: request.whisperCLIPath)
         let modelURL = URL(fileURLWithPath: request.modelPath)
+        let outputBaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("custom-stt-whisper-\(UUID().uuidString)")
+        let jsonOutputURL = outputBaseURL.appendingPathExtension("json")
+        defer { try? FileManager.default.removeItem(at: jsonOutputURL) }
 
         let process = Process()
         process.executableURL = executableURL
@@ -177,7 +190,9 @@ final class WhisperTranscriber: ObservableObject {
             "-f", audioURL.path,
             "-l", "auto",
             "-nt",
-            "-np"
+            "-np",
+            "-oj",
+            "-of", outputBaseURL.path
         ]
 
         var environment = ProcessInfo.processInfo.environment
@@ -185,8 +200,9 @@ final class WhisperTranscriber: ObservableObject {
         process.environment = environment
 
         let processResult = try processController.run(process)
+        let languageCode = detectedLanguageCode(from: jsonOutputURL)
         let commandLine = "\(executableURL.path) \(process.arguments?.joined(separator: " ") ?? "")"
-        writeWhisperLog(commandLine: commandLine, processResult: processResult)
+        writeWhisperLog(commandLine: commandLine, processResult: processResult, languageCode: languageCode)
 
         if processResult.wasCancelled {
             throw TranscriptionCancellation.cancelled
@@ -195,7 +211,7 @@ final class WhisperTranscriber: ObservableObject {
             throw TranscriptionError.processFailed(commandName: "whisper-cli", status: processResult.terminationStatus, stderr: processResult.stderrText)
         }
 
-        return processResult.stdoutText
+        return WhisperResult(transcript: processResult.stdoutText, languageCode: languageCode)
     }
 
     nonisolated private static func normalizedWAVURL(for inputURL: URL, processController: TranscriptionProcessController) throws -> URL {
@@ -226,9 +242,18 @@ final class WhisperTranscriber: ObservableObject {
         return outputURL
     }
 
-    nonisolated private static func writeWhisperLog(commandLine: String, processResult: ProcessRunResult) {
+    nonisolated private static func detectedLanguageCode(from url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONDecoder().decode(WhisperJSONResult.self, from: data)
+        else { return nil }
+
+        return json.result.language
+    }
+
+    nonisolated private static func writeWhisperLog(commandLine: String, processResult: ProcessRunResult, languageCode: String?) {
         let cancellationText = processResult.wasCancelled ? "yes" : "no"
-        let log = "backend: whisper.cpp\ncancelled: \(cancellationText)\ncommand: \(commandLine)\n\nSTDOUT\n\(processResult.stdoutText)\n\nSTDERR\n\(processResult.stderrText)\n"
+        let languageText = languageCode ?? "unknown"
+        let log = "backend: whisper.cpp\ncancelled: \(cancellationText)\nlanguage: \(languageText)\ncommand: \(commandLine)\n\nSTDOUT\n\(processResult.stdoutText)\n\nSTDERR\n\(processResult.stderrText)\n"
         do {
             try log.write(to: AppPaths.whisperLogURL, atomically: true, encoding: .utf8)
         } catch {
@@ -248,6 +273,19 @@ final class WhisperTranscriber: ObservableObject {
 private struct WhisperRequest: Sendable {
     let whisperCLIPath: String
     let modelPath: String
+}
+
+private struct WhisperResult: Sendable {
+    let transcript: String
+    let languageCode: String?
+}
+
+private struct WhisperJSONResult: Decodable {
+    let result: Result
+
+    struct Result: Decodable {
+        let language: String?
+    }
 }
 
 private enum TranscriptionCancellation: Error {
