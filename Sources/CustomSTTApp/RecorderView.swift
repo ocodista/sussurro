@@ -89,10 +89,10 @@ struct RecorderView: View {
     private var controls: some View {
         HStack(spacing: 10) {
             Button {
-                Task { await toggleRecording() }
+                Task { await handlePrimaryAction() }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: recorder.isRecording ? "stop.fill" : "mic.fill")
+                    Image(systemName: recordButtonIcon)
                     Text(recordButtonTitle)
                 }
                 .font(.system(.body, design: .rounded).weight(.semibold))
@@ -102,8 +102,8 @@ struct RecorderView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(transcriber.isTranscribing)
-            .opacity(transcriber.isTranscribing ? 0.55 : 1)
+            .disabled(transcriber.isStoppingTranscription)
+            .opacity(transcriber.isStoppingTranscription ? 0.55 : 1)
 
             Text(timingText)
                 .font(.system(.caption, design: .monospaced).weight(.medium))
@@ -180,12 +180,18 @@ struct RecorderView: View {
 
     private var recordButtonTitle: String {
         if recorder.isRecording { return "Stop" }
-        if transcriber.isTranscribing { return "Wait" }
+        if transcriber.isStoppingTranscription { return "Stopping" }
+        if transcriber.isTranscribing { return "Stop" }
         return "Record"
     }
 
+    private var recordButtonIcon: String {
+        if recorder.isRecording || transcriber.isTranscribing { return "stop.fill" }
+        return "mic.fill"
+    }
+
     private var recordButtonColor: Color {
-        if recorder.isRecording { return .red.opacity(0.92) }
+        if recorder.isRecording || transcriber.isTranscribing { return .red.opacity(0.92) }
         return Color.white.opacity(0.105)
     }
 
@@ -223,13 +229,28 @@ struct RecorderView: View {
         }
     }
 
+    private func handlePrimaryAction() async {
+        if transcriber.isTranscribing {
+            transcriber.stopTranscription()
+            return
+        }
+
+        await toggleRecording()
+    }
+
     private func toggleRecording() async {
+        if transcriber.isTranscribing {
+            transcriber.stopTranscription()
+            return
+        }
+
         if recorder.isRecording {
             do {
                 let audioURL = try recorder.stopRecording()
                 lastRecordingURL = audioURL
-                await transcriber.transcribe(audioURL: audioURL)
-                copyTranscript()
+                if await transcriber.transcribe(audioURL: audioURL) {
+                    copyTranscript()
+                }
             } catch {
                 recorder.errorMessage = error.localizedDescription
             }

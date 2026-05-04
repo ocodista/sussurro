@@ -7,6 +7,7 @@ A small local macOS speech-to-text app:
 - Linear-inspired dark floating UI
 - local transcription through open-source `whisper.cpp` (`whisper-cli`)
 - optional `faster-whisper` backend with a Settings switch
+- stop/cancel button while transcription is running
 - native macOS Settings window for backend, model, and executable paths
 - live and final transcription duration
 - records audio to the standard macOS app data folder
@@ -101,7 +102,7 @@ To use faster-whisper:
 3. Turn on **Use faster-whisper**.
 4. Keep model as `large-v3-turbo`, or set another faster-whisper model name, Hugging Face ID, or local CTranslate2 model folder.
 
-The selected faster-whisper model downloads on first transcription into `~/Library/Application Support/CustomSTT/Models/FasterWhisper/`.
+The selected faster-whisper model downloads on first transcription into `~/Library/Application Support/CustomSTT/Models/FasterWhisper/`. The first faster-whisper run can take longer while that model downloads; press **Stop** to cancel it.
 
 ## If transcription fails
 

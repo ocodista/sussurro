@@ -119,7 +119,7 @@ struct SettingsView: View {
 
     private var settingsTip: String {
         if settings.useFasterWhisper {
-            return "Tip: run scripts/install-faster-whisper.sh to create the app-managed Python environment. The selected model downloads into ~/Library/Application Support/CustomSTT/Models/FasterWhisper on first use."
+            return "Tip: run scripts/install-faster-whisper.sh to create the app-managed Python environment. The selected model downloads into ~/Library/Application Support/CustomSTT/Models/FasterWhisper on first use; press Stop to cancel a long first download."
         }
 
         return "Tip: run scripts/download-model.sh turbo to install a local open-source Whisper model in the standard macOS app data folder."

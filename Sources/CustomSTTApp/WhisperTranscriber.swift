@@ -1,34 +1,39 @@
+import Darwin
 import Foundation
 
 @MainActor
 final class WhisperTranscriber: ObservableObject {
     @Published private(set) var isTranscribing = false
+    @Published private(set) var isStoppingTranscription = false
     @Published var transcript = ""
     @Published var errorMessage: String?
     @Published private(set) var currentTranscriptionElapsed: TimeInterval = 0
     @Published private(set) var lastTranscriptionDuration: TimeInterval?
 
     private let settings: AppSettings
+    private let processController = TranscriptionProcessController()
     private var transcriptionTimer: Timer?
 
     init(settings: AppSettings) {
         self.settings = settings
     }
 
-    func transcribe(audioURL: URL) async {
-        guard !isTranscribing else { return }
+    func transcribe(audioURL: URL) async -> Bool {
+        guard !isTranscribing else { return false }
 
         let request: TranscriptionRequest
         if settings.useFasterWhisper {
-            guard let fasterWhisperRequest = fasterWhisperRequest() else { return }
+            guard let fasterWhisperRequest = fasterWhisperRequest() else { return false }
             request = fasterWhisperRequest
         } else {
-            guard let whisperCppRequest = whisperCppRequest() else { return }
+            guard let whisperCppRequest = whisperCppRequest() else { return false }
             request = whisperCppRequest
         }
 
         let startedAt = Date()
+        processController.resetCancellation()
         isTranscribing = true
+        isStoppingTranscription = false
         currentTranscriptionElapsed = 0
         lastTranscriptionDuration = nil
         errorMessage = nil
@@ -37,6 +42,7 @@ final class WhisperTranscriber: ObservableObject {
             lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
             currentTranscriptionElapsed = lastTranscriptionDuration ?? currentTranscriptionElapsed
             stopTranscriptionTimer()
+            isStoppingTranscription = false
             isTranscribing = false
         }
 
@@ -49,9 +55,21 @@ final class WhisperTranscriber: ObservableObject {
                 result = try await runFasterWhisper(audioURL: audioURL, pythonPath: pythonPath, model: model, device: device)
             }
             transcript = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return true
+        } catch TranscriptionCancellation.cancelled {
+            errorMessage = "Transcription stopped."
+            return false
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
+    }
+
+    func stopTranscription() {
+        guard isTranscribing else { return }
+        isStoppingTranscription = true
+        errorMessage = "Stopping transcription…"
+        processController.cancel()
     }
 
     func appendToTranscript(_ text: String) {
@@ -138,9 +156,10 @@ final class WhisperTranscriber: ObservableObject {
     private func runWhisperCpp(audioURL: URL, whisperCLIPath: String, modelPath: String) async throws -> String {
         let executableURL = URL(fileURLWithPath: whisperCLIPath)
         let modelURL = URL(fileURLWithPath: modelPath)
+        let processController = processController
 
         return try await Task.detached(priority: .userInitiated) {
-            let normalizedAudioURL = try Self.normalizedWAVURL(for: audioURL)
+            let normalizedAudioURL = try Self.normalizedWAVURL(for: audioURL, processController: processController)
 
             let process = Process()
             process.executableURL = executableURL
@@ -156,33 +175,28 @@ final class WhisperTranscriber: ObservableObject {
             environment["GGML_METAL_PATH_RESOURCES"] = "/opt/homebrew/lib"
             process.environment = environment
 
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            try process.run()
-            process.waitUntilExit()
-
-            let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
+            let processResult = try processController.run(process)
             let commandLine = "\(executableURL.path) \(process.arguments?.joined(separator: " ") ?? "")"
-            Self.writeWhisperLog(backend: "whisper.cpp", commandLine: commandLine, stdoutText: stdoutText, stderrText: stderrText)
+            Self.writeWhisperLog(backend: "whisper.cpp", commandLine: commandLine, processResult: processResult)
 
-            guard process.terminationStatus == 0 else {
-                throw TranscriptionError.processFailed(commandName: "whisper-cli", status: process.terminationStatus, stderr: stderrText)
+            if processResult.wasCancelled {
+                throw TranscriptionCancellation.cancelled
+            }
+            guard processResult.terminationStatus == 0 else {
+                throw TranscriptionError.processFailed(commandName: "whisper-cli", status: processResult.terminationStatus, stderr: processResult.stderrText)
             }
 
-            return stdoutText
+            return processResult.stdoutText
         }.value
     }
 
     private func runFasterWhisper(audioURL: URL, pythonPath: String, model: String, device: String) async throws -> String {
         let executableURL = URL(fileURLWithPath: pythonPath)
+        let computeType = device == "cuda" ? "float16" : "int8"
+        let processController = processController
 
         return try await Task.detached(priority: .userInitiated) {
-            let normalizedAudioURL = try Self.normalizedWAVURL(for: audioURL)
+            let normalizedAudioURL = try Self.normalizedWAVURL(for: audioURL, processController: processController)
 
             let process = Process()
             process.executableURL = executableURL
@@ -191,7 +205,7 @@ final class WhisperTranscriber: ObservableObject {
                 "--audio", normalizedAudioURL.path,
                 "--model", model,
                 "--device", device,
-                "--compute-type", "default"
+                "--compute-type", computeType
             ]
 
             var environment = ProcessInfo.processInfo.environment
@@ -201,29 +215,24 @@ final class WhisperTranscriber: ObservableObject {
             environment["TOKENIZERS_PARALLELISM"] = "false"
             process.environment = environment
 
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
+            let processResult = try processController.run(process)
+            let commandLine = "\(executableURL.path) -c <faster-whisper transcriber> --audio \(normalizedAudioURL.path) --model \(model) --device \(device) --compute-type \(computeType)"
+            Self.writeWhisperLog(backend: "faster-whisper", commandLine: commandLine, processResult: processResult)
 
-            try process.run()
-            process.waitUntilExit()
-
-            let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
-            let commandLine = "\(executableURL.path) -c <faster-whisper transcriber> --audio \(normalizedAudioURL.path) --model \(model) --device \(device) --compute-type default"
-            Self.writeWhisperLog(backend: "faster-whisper", commandLine: commandLine, stdoutText: stdoutText, stderrText: stderrText)
-
-            guard process.terminationStatus == 0 else {
-                throw TranscriptionError.processFailed(commandName: "faster-whisper", status: process.terminationStatus, stderr: stderrText)
+            if processResult.wasCancelled {
+                throw TranscriptionCancellation.cancelled
+            }
+            guard processResult.terminationStatus == 0 else {
+                throw TranscriptionError.processFailed(commandName: "faster-whisper", status: processResult.terminationStatus, stderr: processResult.stderrText)
             }
 
-            return stdoutText
+            return processResult.stdoutText
         }.value
     }
 
-    nonisolated private static func normalizedWAVURL(for inputURL: URL) throws -> URL {
+    nonisolated private static func normalizedWAVURL(for inputURL: URL, processController: TranscriptionProcessController) throws -> URL {
+        try processController.checkCancellation()
+
         let outputName = inputURL.deletingPathExtension().lastPathComponent + "-whisper.wav"
         let outputURL = inputURL.deletingLastPathComponent().appendingPathComponent(outputName)
         try? FileManager.default.removeItem(at: outputURL)
@@ -238,22 +247,21 @@ final class WhisperTranscriber: ObservableObject {
             outputURL.path
         ]
 
-        let stderr = Pipe()
-        process.standardError = stderr
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw AudioConversionError.failed(status: process.terminationStatus, stderr: stderrText)
+        let processResult = try processController.run(process)
+        if processResult.wasCancelled {
+            throw TranscriptionCancellation.cancelled
+        }
+        guard processResult.terminationStatus == 0 else {
+            throw AudioConversionError.failed(status: processResult.terminationStatus, stderr: processResult.stderrText)
         }
 
         return outputURL
     }
 
-    nonisolated private static func writeWhisperLog(backend: String, commandLine: String, stdoutText: String, stderrText: String) {
+    nonisolated private static func writeWhisperLog(backend: String, commandLine: String, processResult: ProcessRunResult) {
         let logURL = AppPaths.whisperLogURL
-        let log = "backend: \(backend)\ncommand: \(commandLine)\n\nSTDOUT\n\(stdoutText)\n\nSTDERR\n\(stderrText)\n"
+        let cancellationText = processResult.wasCancelled ? "yes" : "no"
+        let log = "backend: \(backend)\ncancelled: \(cancellationText)\ncommand: \(commandLine)\n\nSTDOUT\n\(processResult.stdoutText)\n\nSTDERR\n\(processResult.stderrText)\n"
         do {
             try log.write(to: logURL, atomically: true, encoding: .utf8)
         } catch {
@@ -312,6 +320,106 @@ for segment in segments:
 private enum TranscriptionRequest {
     case whisperCpp(whisperCLIPath: String, modelPath: String)
     case fasterWhisper(pythonPath: String, model: String, device: String)
+}
+
+private enum TranscriptionCancellation: Error {
+    case cancelled
+}
+
+private struct ProcessRunResult {
+    let stdoutText: String
+    let stderrText: String
+    let terminationStatus: Int32
+    let wasCancelled: Bool
+}
+
+private final class TranscriptionProcessController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var currentProcess: Process?
+    private var cancellationRequested = false
+
+    func resetCancellation() {
+        lock.lock()
+        cancellationRequested = false
+        currentProcess = nil
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancellationRequested = true
+        let process = currentProcess
+        lock.unlock()
+
+        guard let process else { return }
+        terminate(process)
+    }
+
+    func checkCancellation() throws {
+        if isCancellationRequested() {
+            throw TranscriptionCancellation.cancelled
+        }
+    }
+
+    func run(_ process: Process) throws -> ProcessRunResult {
+        try checkCancellation()
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        lock.lock()
+        currentProcess = process
+        lock.unlock()
+
+        do {
+            try checkCancellation()
+            try process.run()
+            if isCancellationRequested() {
+                terminate(process)
+            }
+            process.waitUntilExit()
+        } catch {
+            clearCurrentProcess(process)
+            throw error
+        }
+
+        let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let wasCancelled = isCancellationRequested()
+        let terminationStatus = process.terminationStatus
+        clearCurrentProcess(process)
+
+        return ProcessRunResult(stdoutText: stdoutText, stderrText: stderrText, terminationStatus: terminationStatus, wasCancelled: wasCancelled)
+    }
+
+    private func clearCurrentProcess(_ process: Process) {
+        lock.lock()
+        if currentProcess === process {
+            currentProcess = nil
+        }
+        lock.unlock()
+    }
+
+    private func isCancellationRequested() -> Bool {
+        lock.lock()
+        let isCancelled = cancellationRequested
+        lock.unlock()
+        return isCancelled
+    }
+
+    private func terminate(_ process: Process) {
+        guard process.isRunning else { return }
+
+        let processID = process.processIdentifier
+        process.terminate()
+
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+            guard process.isRunning else { return }
+            kill(processID, SIGKILL)
+        }
+    }
 }
 
 enum TranscriptionError: LocalizedError {
