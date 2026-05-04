@@ -9,6 +9,7 @@ A small local macOS speech-to-text app:
 - stop/cancel button while transcription is running
 - native macOS Settings window for model and executable paths
 - live and final transcription duration
+- detected language pill with flags for Portuguese, English, and Spanish
 - records audio to the standard macOS app data folder
 - writes the latest transcription command log to the standard macOS logs folder
 - copies transcripts to the clipboard after transcription

@@ -47,8 +47,28 @@ final class WhisperTranscriber: ObservableObject {
 
     var detectedLanguageDisplay: String? {
         guard let detectedLanguageCode else { return nil }
-        let languageName = Locale.current.localizedString(forLanguageCode: detectedLanguageCode) ?? detectedLanguageCode.uppercased()
-        return "\(detectedLanguageCode.uppercased()) · \(languageName.capitalized)"
+        let normalizedCode = Self.normalizedLanguageCode(detectedLanguageCode)
+        let languageName = Locale.current.localizedString(forLanguageCode: normalizedCode) ?? normalizedCode.uppercased()
+        let flagPrefix = Self.languageFlag(for: normalizedCode).map { "\($0) " } ?? ""
+        return "\(flagPrefix)\(normalizedCode.uppercased()) · \(languageName.capitalized)"
+    }
+
+    private static func normalizedLanguageCode(_ code: String) -> String {
+        let normalizedCode = code.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedCode.split { $0 == "-" || $0 == "_" }.first.map(String.init) ?? normalizedCode
+    }
+
+    private static func languageFlag(for code: String) -> String? {
+        switch code {
+        case "pt":
+            return "🇧🇷"
+        case "en":
+            return "🇺🇸"
+        case "es":
+            return "🇪🇸"
+        default:
+            return nil
+        }
     }
 
     func transcribe(audioURL: URL) async -> Bool {
