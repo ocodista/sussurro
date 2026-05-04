@@ -18,24 +18,13 @@ final class WhisperTranscriber: ObservableObject {
     func transcribe(audioURL: URL) async {
         guard !isTranscribing else { return }
 
-        let modelPath = settings.expandedModelPath
-        let whisperCLIPath = settings.expandedWhisperCLIPath
-
-        guard !modelPath.isEmpty else {
-            errorMessage = "Missing Whisper model. Run scripts/download-model.sh or set a model path."
-            return
-        }
-        guard FileManager.default.fileExists(atPath: modelPath) else {
-            errorMessage = "Whisper model not found at \(modelPath)."
-            return
-        }
-        guard !whisperCLIPath.isEmpty else {
-            errorMessage = "whisper-cli was not found. Install it with: brew install whisper-cpp"
-            return
-        }
-        guard FileManager.default.isExecutableFile(atPath: whisperCLIPath) else {
-            errorMessage = "whisper-cli not found or not executable at \(whisperCLIPath)."
-            return
+        let request: TranscriptionRequest
+        if settings.useFasterWhisper {
+            guard let fasterWhisperRequest = fasterWhisperRequest() else { return }
+            request = fasterWhisperRequest
+        } else {
+            guard let whisperCppRequest = whisperCppRequest() else { return }
+            request = whisperCppRequest
         }
 
         let startedAt = Date()
@@ -52,7 +41,13 @@ final class WhisperTranscriber: ObservableObject {
         }
 
         do {
-            let result = try await runWhisper(audioURL: audioURL, whisperCLIPath: whisperCLIPath, modelPath: modelPath)
+            let result: String
+            switch request {
+            case let .whisperCpp(whisperCLIPath, modelPath):
+                result = try await runWhisperCpp(audioURL: audioURL, whisperCLIPath: whisperCLIPath, modelPath: modelPath)
+            case let .fasterWhisper(pythonPath, model, device):
+                result = try await runFasterWhisper(audioURL: audioURL, pythonPath: pythonPath, model: model, device: device)
+            }
             transcript = result.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             errorMessage = error.localizedDescription
@@ -77,6 +72,55 @@ final class WhisperTranscriber: ObservableObject {
         currentTranscriptionElapsed = 0
     }
 
+    private func whisperCppRequest() -> TranscriptionRequest? {
+        let modelPath = settings.expandedModelPath
+        let whisperCLIPath = settings.expandedWhisperCLIPath
+
+        guard !modelPath.isEmpty else {
+            errorMessage = "Missing Whisper model. Run scripts/download-model.sh or set a model path."
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: modelPath) else {
+            errorMessage = "Whisper model not found at \(modelPath)."
+            return nil
+        }
+        guard !whisperCLIPath.isEmpty else {
+            errorMessage = "whisper-cli was not found. Install it with: brew install whisper-cpp"
+            return nil
+        }
+        guard FileManager.default.isExecutableFile(atPath: whisperCLIPath) else {
+            errorMessage = "whisper-cli not found or not executable at \(whisperCLIPath)."
+            return nil
+        }
+
+        return .whisperCpp(whisperCLIPath: whisperCLIPath, modelPath: modelPath)
+    }
+
+    private func fasterWhisperRequest() -> TranscriptionRequest? {
+        let pythonPath = settings.expandedFasterWhisperPythonPath
+        let model = settings.resolvedFasterWhisperModel
+        let device = settings.fasterWhisperDevice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "auto" : settings.fasterWhisperDevice
+
+        guard !model.isEmpty else {
+            errorMessage = "Missing faster-whisper model. Use a model name like large-v3-turbo or a local CTranslate2 model folder."
+            return nil
+        }
+        if Self.isLocalPath(model), !FileManager.default.fileExists(atPath: model) {
+            errorMessage = "faster-whisper model folder not found at \(model)."
+            return nil
+        }
+        guard !pythonPath.isEmpty else {
+            errorMessage = "Missing Python executable. Run scripts/install-faster-whisper.sh or set a Python path."
+            return nil
+        }
+        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
+            errorMessage = "Python executable not found at \(pythonPath). Run scripts/install-faster-whisper.sh."
+            return nil
+        }
+
+        return .fasterWhisper(pythonPath: pythonPath, model: model, device: device)
+    }
+
     private func startTranscriptionTimer(startedAt: Date) {
         transcriptionTimer?.invalidate()
         transcriptionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -91,7 +135,7 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionTimer = nil
     }
 
-    private func runWhisper(audioURL: URL, whisperCLIPath: String, modelPath: String) async throws -> String {
+    private func runWhisperCpp(audioURL: URL, whisperCLIPath: String, modelPath: String) async throws -> String {
         let executableURL = URL(fileURLWithPath: whisperCLIPath)
         let modelURL = URL(fileURLWithPath: modelPath)
 
@@ -123,16 +167,56 @@ final class WhisperTranscriber: ObservableObject {
             let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
 
-            let logURL = AppPaths.whisperLogURL
-            let log = "command: \(executableURL.path) \(process.arguments?.joined(separator: " ") ?? "")\n\nSTDOUT\n\(stdoutText)\n\nSTDERR\n\(stderrText)\n"
-            do {
-                try log.write(to: logURL, atomically: true, encoding: .utf8)
-            } catch {
-                NSLog("CustomSTT: could not write Whisper log to %@: %@", logURL.path, error.localizedDescription)
-            }
+            let commandLine = "\(executableURL.path) \(process.arguments?.joined(separator: " ") ?? "")"
+            Self.writeWhisperLog(backend: "whisper.cpp", commandLine: commandLine, stdoutText: stdoutText, stderrText: stderrText)
 
             guard process.terminationStatus == 0 else {
-                throw TranscriptionError.processFailed(status: process.terminationStatus, stderr: stderrText)
+                throw TranscriptionError.processFailed(commandName: "whisper-cli", status: process.terminationStatus, stderr: stderrText)
+            }
+
+            return stdoutText
+        }.value
+    }
+
+    private func runFasterWhisper(audioURL: URL, pythonPath: String, model: String, device: String) async throws -> String {
+        let executableURL = URL(fileURLWithPath: pythonPath)
+
+        return try await Task.detached(priority: .userInitiated) {
+            let normalizedAudioURL = try Self.normalizedWAVURL(for: audioURL)
+
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = [
+                "-c", Self.fasterWhisperPythonScript,
+                "--audio", normalizedAudioURL.path,
+                "--model", model,
+                "--device", device,
+                "--compute-type", "default"
+            ]
+
+            var environment = ProcessInfo.processInfo.environment
+            environment["CUSTOM_STT_FASTER_WHISPER_DOWNLOAD_ROOT"] = AppPaths.fasterWhisperModelsDirectory.path
+            environment["HF_HOME"] = AppPaths.huggingFaceCacheDirectory.path
+            environment["XDG_CACHE_HOME"] = AppPaths.cacheDirectory.path
+            environment["TOKENIZERS_PARALLELISM"] = "false"
+            process.environment = environment
+
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            try process.run()
+            process.waitUntilExit()
+
+            let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+            let commandLine = "\(executableURL.path) -c <faster-whisper transcriber> --audio \(normalizedAudioURL.path) --model \(model) --device \(device) --compute-type default"
+            Self.writeWhisperLog(backend: "faster-whisper", commandLine: commandLine, stdoutText: stdoutText, stderrText: stderrText)
+
+            guard process.terminationStatus == 0 else {
+                throw TranscriptionError.processFailed(commandName: "faster-whisper", status: process.terminationStatus, stderr: stderrText)
             }
 
             return stdoutText
@@ -167,6 +251,20 @@ final class WhisperTranscriber: ObservableObject {
         return outputURL
     }
 
+    nonisolated private static func writeWhisperLog(backend: String, commandLine: String, stdoutText: String, stderrText: String) {
+        let logURL = AppPaths.whisperLogURL
+        let log = "backend: \(backend)\ncommand: \(commandLine)\n\nSTDOUT\n\(stdoutText)\n\nSTDERR\n\(stderrText)\n"
+        do {
+            try log.write(to: logURL, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("CustomSTT: could not write Whisper log to %@: %@", logURL.path, error.localizedDescription)
+        }
+    }
+
+    nonisolated private static func isLocalPath(_ model: String) -> Bool {
+        model.hasPrefix("/") || model.hasPrefix("./") || model.hasPrefix("../")
+    }
+
     nonisolated static func defaultWhisperCLIURL() -> URL? {
         AppPaths.defaultWhisperCLIURL()
     }
@@ -174,19 +272,59 @@ final class WhisperTranscriber: ObservableObject {
     nonisolated static func defaultModelURL() -> URL? {
         AppPaths.defaultModelURL()
     }
+
+    nonisolated private static let fasterWhisperPythonScript = """
+import argparse
+import os
+import sys
+
+try:
+    from faster_whisper import WhisperModel
+except Exception as error:
+    print("faster-whisper Python package is not installed for this Python executable.", file=sys.stderr)
+    print("Install it with: scripts/install-faster-whisper.sh", file=sys.stderr)
+    print(f"Import error: {error}", file=sys.stderr)
+    raise SystemExit(127)
+
+parser = argparse.ArgumentParser(description="Transcribe audio with faster-whisper for CustomSTT.")
+parser.add_argument("--audio", required=True)
+parser.add_argument("--model", required=True)
+parser.add_argument("--device", default="auto")
+parser.add_argument("--compute-type", default="default")
+args = parser.parse_args()
+
+download_root = os.environ.get("CUSTOM_STT_FASTER_WHISPER_DOWNLOAD_ROOT") or None
+model = WhisperModel(
+    args.model,
+    device=args.device,
+    compute_type=args.compute_type,
+    download_root=download_root,
+)
+segments, _ = model.transcribe(args.audio, language=None, beam_size=5, vad_filter=True)
+
+for segment in segments:
+    text = segment.text.strip()
+    if text:
+        print(text, flush=True)
+"""
+}
+
+private enum TranscriptionRequest {
+    case whisperCpp(whisperCLIPath: String, modelPath: String)
+    case fasterWhisper(pythonPath: String, model: String, device: String)
 }
 
 enum TranscriptionError: LocalizedError {
-    case processFailed(status: Int32, stderr: String)
+    case processFailed(commandName: String, status: Int32, stderr: String)
 
     var errorDescription: String? {
         switch self {
-        case let .processFailed(status, stderr):
+        case let .processFailed(commandName, status, stderr):
             let details = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             if details.isEmpty {
-                return "whisper-cli failed with exit code \(status). See \(AppPaths.abbreviatedPath(AppPaths.whisperLogURL))."
+                return "\(commandName) failed with exit code \(status). See \(AppPaths.abbreviatedPath(AppPaths.whisperLogURL))."
             }
-            return "whisper-cli failed with exit code \(status): \(details)"
+            return "\(commandName) failed with exit code \(status): \(details)"
         }
     }
 }

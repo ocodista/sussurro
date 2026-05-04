@@ -4,14 +4,16 @@ import SwiftUI
 struct RecorderView: View {
     @StateObject private var recorder: AudioRecorder
     @StateObject private var transcriber: WhisperTranscriber
+    @ObservedObject private var settings: AppSettings
     @State private var lastRecordingURL: URL?
     @State private var copied = false
     @State private var hotKey: GlobalHotKey?
     @State private var hotKeyError: String?
 
-    init(recorder: AudioRecorder, transcriber: WhisperTranscriber) {
+    init(recorder: AudioRecorder, transcriber: WhisperTranscriber, settings: AppSettings) {
         _recorder = StateObject(wrappedValue: recorder)
         _transcriber = StateObject(wrappedValue: transcriber)
+        _settings = ObservedObject(wrappedValue: settings)
     }
 
     var body: some View {
@@ -52,6 +54,25 @@ struct RecorderView: View {
             }
 
             Spacer()
+
+            Button {
+                settings.useFasterWhisper.toggle()
+            } label: {
+                Text(settings.useFasterWhisper ? "faster" : "cpp")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(settings.useFasterWhisper ? .blue.opacity(0.92) : .white.opacity(0.45))
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .background(Color.white.opacity(settings.useFasterWhisper ? 0.10 : 0.04), in: Capsule(style: .continuous))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(settings.useFasterWhisper ? 0.14 : 0.06), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(transcriber.isTranscribing)
+            .opacity(transcriber.isTranscribing ? 0.55 : 1)
+            .help(settings.useFasterWhisper ? "Using faster-whisper for the next transcription" : "Using whisper.cpp for the next transcription")
 
             Button {
                 openSettingsWindow()
@@ -149,8 +170,12 @@ struct RecorderView: View {
 
     private var statusText: String {
         if recorder.isRecording { return "Recording" }
-        if transcriber.isTranscribing { return "Transcribing" }
-        return "Ready · ⌘⌥M"
+        if transcriber.isTranscribing { return "Transcribing with \(backendName)" }
+        return "Ready · \(backendName) · ⌘⌥M"
+    }
+
+    private var backendName: String {
+        settings.useFasterWhisper ? "faster" : "cpp"
     }
 
     private var recordButtonTitle: String {

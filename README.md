@@ -6,29 +6,37 @@ A small local macOS speech-to-text app:
 - live microphone waveform visualizer
 - Linear-inspired dark floating UI
 - local transcription through open-source `whisper.cpp` (`whisper-cli`)
-- native macOS Settings window for model and `whisper-cli` paths
-- live and final Whisper transcription duration
+- optional `faster-whisper` backend with a Settings switch
+- native macOS Settings window for backend, model, and executable paths
+- live and final transcription duration
 - records audio to the standard macOS app data folder
-- writes the latest Whisper command log to the standard macOS logs folder
+- writes the latest transcription command log to the standard macOS logs folder
 - copies each transcript to the clipboard after transcription
 
 ## App data paths
 
-The app now uses macOS-standard user data locations instead of writing generated files into the project checkout:
+The app uses macOS-standard user data locations instead of writing generated files into the project checkout:
 
-- Models: `~/Library/Application Support/CustomSTT/Models/`
+- GGML models: `~/Library/Application Support/CustomSTT/Models/`
+- faster-whisper models: `~/Library/Application Support/CustomSTT/Models/FasterWhisper/`
 - Recordings: `~/Library/Application Support/CustomSTT/Recordings/`
 - Logs: `~/Library/Logs/CustomSTT/`
-- Latest Whisper log: `~/Library/Logs/CustomSTT/whisper-last.log`
+- Caches: `~/Library/Caches/CustomSTT/`
+- Latest transcription log: `~/Library/Logs/CustomSTT/whisper-last.log`
 
 ## Installed pieces
 
-This project expects:
+For whisper.cpp mode, this project expects:
 
 - `/opt/homebrew/bin/whisper-cli` from Homebrew `whisper-cpp`
 - a Whisper GGML model in `~/Library/Application Support/CustomSTT/Models/`
 
-The app also checks a few existing local model locations as fallbacks, including `~/.whisper-models/` and the old project-local `Models/` folder.
+For faster-whisper mode, this project expects:
+
+- an app-managed Python environment at `~/Library/Application Support/CustomSTT/faster-whisper-venv/`
+- a faster-whisper model name like `large-v3-turbo`, a Hugging Face model ID, or a local CTranslate2 model folder
+
+The app also checks a few existing local GGML model locations as fallbacks, including `~/.whisper-models/` and the old project-local `Models/` folder.
 
 ## Install and run
 
@@ -49,12 +57,27 @@ macOS will ask for microphone access on first run. Allow it.
 
 ## Install or refresh dependencies
 
+whisper.cpp only:
+
 ```bash
 cd ~/personal/custom-stt-swift_ui
 scripts/install-deps.sh turbo
 ```
 
-Model choices:
+whisper.cpp plus faster-whisper:
+
+```bash
+cd ~/personal/custom-stt-swift_ui
+scripts/install-deps.sh turbo --with-faster-whisper
+```
+
+Or install only the faster-whisper backend:
+
+```bash
+scripts/install-faster-whisper.sh
+```
+
+GGML model choices for whisper.cpp:
 
 - `turbo` — better accuracy, still fast on Apple Silicon
 - `base` — smaller/faster, lower accuracy
@@ -69,7 +92,16 @@ Model choices:
 5. Press **Stop**, space, or **⌘⌥M**.
 6. Wait for transcription; the result appears in the text box and is copied to the clipboard.
 
-Click the gear button or use **CustomSTT → Settings…** to edit the `whisper-cli` and model paths.
+Click the gear button or use **CustomSTT → Settings…** to edit paths and switch backends.
+
+To use faster-whisper:
+
+1. Run `scripts/install-faster-whisper.sh`.
+2. Open Settings.
+3. Turn on **Use faster-whisper**.
+4. Keep model as `large-v3-turbo`, or set another faster-whisper model name, Hugging Face ID, or local CTranslate2 model folder.
+
+The selected faster-whisper model downloads on first transcription into `~/Library/Application Support/CustomSTT/Models/FasterWhisper/`.
 
 ## If transcription fails
 
@@ -84,4 +116,5 @@ Common fixes:
 ```bash
 brew install whisper-cpp
 scripts/download-model.sh turbo
+scripts/install-faster-whisper.sh
 ```

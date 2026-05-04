@@ -6,7 +6,7 @@ final class FloatingRecorderWindowController: NSWindowController {
     init(settings: AppSettings) {
         let recorder = AudioRecorder()
         let transcriber = WhisperTranscriber(settings: settings)
-        let contentView = RecorderView(recorder: recorder, transcriber: transcriber)
+        let contentView = RecorderView(recorder: recorder, transcriber: transcriber, settings: settings)
 
         let panel = FloatingRecorderPanel(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 430),
