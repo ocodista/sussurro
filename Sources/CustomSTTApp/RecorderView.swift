@@ -17,17 +17,17 @@ struct RecorderView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             header
             WaveformView(levels: recorder.levels, isRecording: recorder.isRecording)
             controls
             transcriptionCard
             footer
         }
-        .padding(.top, 28)
-        .padding(.horizontal, 24)
-        .padding(.bottom, 22)
-        .frame(minWidth: 540, minHeight: 450)
+        .padding(.top, 52)
+        .padding(.horizontal, 40)
+        .padding(.bottom, 34)
+        .frame(minWidth: 600, minHeight: 520)
         .background(Color(red: 0.065, green: 0.067, blue: 0.078))
         .preferredColorScheme(.dark)
         .onAppear(perform: registerGlobalHotKey)
@@ -37,7 +37,7 @@ struct RecorderView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
@@ -68,7 +68,7 @@ struct RecorderView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             Button {
                 Task { await handlePrimaryAction() }
             } label: {
@@ -78,8 +78,8 @@ struct RecorderView: View {
                 }
                 .font(.system(.body, design: .rounded).weight(.semibold))
                 .foregroundStyle(.white)
-                .frame(minWidth: 112, minHeight: 38)
-                .background(recordButtonColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .frame(minWidth: 136, minHeight: 44)
+                .background(recordButtonColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.space, modifiers: [])
@@ -108,8 +108,8 @@ struct RecorderView: View {
     }
 
     private var transcriptionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
                 ZStack {
                     Circle()
                         .fill(Color(red: 0.72, green: 0.50, blue: 1.0).opacity(0.16))
@@ -117,7 +117,7 @@ struct RecorderView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color(red: 0.72, green: 0.50, blue: 1.0))
                 }
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("whisper.cpp")
@@ -173,15 +173,15 @@ struct RecorderView: View {
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(.white.opacity(0.88))
                 .scrollContentBackground(.hidden)
-                .padding(10)
-                .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(14)
+                .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(Color.white.opacity(0.055), lineWidth: 1)
                 )
-                .frame(minHeight: 126)
+                .frame(minHeight: 150)
         }
-        .padding(16)
+        .padding(24)
         .background(cardBackground)
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -194,8 +194,8 @@ struct RecorderView: View {
         Text(text)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.white.opacity(0.70))
-            .padding(.horizontal, 8)
-            .frame(height: 22)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
             .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
     }
 
@@ -208,8 +208,8 @@ struct RecorderView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(transcriber.status.statusColor)
         }
-        .padding(.horizontal, 8)
-        .frame(height: 22)
+        .padding(.horizontal, 10)
+        .frame(height: 24)
         .background(transcriber.status.statusColor.opacity(0.11), in: Capsule(style: .continuous))
     }
 
