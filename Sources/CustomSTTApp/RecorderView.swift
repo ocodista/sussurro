@@ -296,10 +296,7 @@ struct RecorderView: View {
     }
 
     private func openSettingsWindow() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        if !NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
-            NSApplication.shared.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+        SettingsWindowController.shared.show()
     }
 
     private func registerGlobalHotKey() {
