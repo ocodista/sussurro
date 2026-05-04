@@ -6,13 +6,14 @@ A small local macOS speech-to-text app:
 - live microphone waveform visualizer
 - Linear-inspired dark floating UI
 - parallel model race after each recording: `whisper.cpp` and optional `faster-whisper`
-- two side-by-side timer/result cards to compare speed and output
+- two side-by-side real-time timer/result cards to compare speed and output
 - stop/cancel button while transcription is running
 - native macOS Settings window for model and executable paths
 - live and final transcription duration per model
 - records audio to the standard macOS app data folder
 - writes transcription command logs to the standard macOS logs folder
 - copies all transcripts, or one model's transcript, to the clipboard
+- source links beside each model: GitHub repo and Hugging Face model page
 
 ## App data paths
 
@@ -32,11 +33,15 @@ The app uses macOS-standard user data locations instead of writing generated fil
 For whisper.cpp, this project expects:
 
 - `/opt/homebrew/bin/whisper-cli` from Homebrew `whisper-cpp`
+- source: <https://github.com/ggml-org/whisper.cpp>
+- GGML models: <https://huggingface.co/ggerganov/whisper.cpp>
 - a Whisper GGML model in `~/Library/Application Support/CustomSTT/Models/`
 
 For faster-whisper comparison, this project expects:
 
 - an app-managed Python environment at `~/Library/Application Support/CustomSTT/faster-whisper-venv/`
+- source: <https://github.com/SYSTRAN/faster-whisper>
+- default `large-v3-turbo` model currently resolves through faster-whisper to <https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo>
 - a faster-whisper model name like `large-v3-turbo`, a Hugging Face model ID, or a local CTranslate2 model folder
 
 The app also checks a few existing local GGML model locations as fallbacks, including `~/.whisper-models/` and the old project-local `Models/` folder.

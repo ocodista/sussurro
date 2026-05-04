@@ -161,7 +161,7 @@ final class WhisperTranscriber: ObservableObject {
                 }
 
                 group.addTask {
-                    await Self.run(request: request, audioURL: normalizedAudioURL, processController: controller)
+                    Self.run(request: request, audioURL: normalizedAudioURL, processController: controller)
                 }
             }
 
@@ -380,7 +380,7 @@ final class WhisperTranscriber: ObservableObject {
         }
     }
 
-    private static func run(request: PreparedTranscriptionRequest, audioURL: URL, processController: TranscriptionProcessController) async -> TranscriptionJobOutcome {
+    nonisolated private static func run(request: PreparedTranscriptionRequest, audioURL: URL, processController: TranscriptionProcessController) -> TranscriptionJobOutcome {
         let startedAt = Date()
 
         do {

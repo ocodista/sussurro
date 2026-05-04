@@ -329,11 +329,27 @@ private struct TranscriptionRunCard: View {
                     Text(run.title)
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(.white.opacity(0.92))
-                    Text(run.modelDescription)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.36))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(run.modelDescription)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.36))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+
+                        SourceLinkButton(
+                            kind: .github,
+                            url: run.backend.repositoryURL,
+                            help: "Open \(run.title) source on GitHub"
+                        )
+
+                        if let huggingFaceURL = run.huggingFaceURL {
+                            SourceLinkButton(
+                                kind: .huggingFace,
+                                url: huggingFaceURL,
+                                help: "Open \(run.modelDescription) on Hugging Face"
+                            )
+                        }
+                    }
                 }
 
                 Spacer()
@@ -342,12 +358,9 @@ private struct TranscriptionRunCard: View {
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(timerText)
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.94))
+                RunTimerText(run: run)
 
-                Text(run.status.statusLabel)
+                Text(run.status.isActive ? "live" : run.status.statusLabel)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(run.status.statusColor)
 
@@ -453,13 +466,6 @@ private struct TranscriptionRunCard: View {
         return .white.opacity(0.38)
     }
 
-    private var timerText: String {
-        if let duration = run.duration, !run.status.isActive {
-            return formatRunSeconds(duration)
-        }
-        return formatRunSeconds(run.elapsed)
-    }
-
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 20, style: .continuous)
             .fill(
@@ -473,6 +479,118 @@ private struct TranscriptionRunCard: View {
                     endPoint: .bottomTrailing
                 )
             )
+    }
+}
+
+private struct RunTimerText: View {
+    let run: TranscriptionRun
+
+    var body: some View {
+        TimelineView(.periodic(from: run.startedAt ?? .now, by: 0.1)) { timeline in
+            Text(formatRunSeconds(elapsed(at: timeline.date)))
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.96))
+                .animation(.linear(duration: 0.08), value: elapsed(at: timeline.date))
+        }
+    }
+
+    private func elapsed(at date: Date) -> TimeInterval {
+        if let duration = run.duration, !run.status.isActive {
+            return duration
+        }
+
+        if run.status.isActive, let startedAt = run.startedAt {
+            return max(0, date.timeIntervalSince(startedAt))
+        }
+
+        return run.elapsed
+    }
+}
+
+private enum SourceLinkKind {
+    case github
+    case huggingFace
+
+    var foregroundColor: Color {
+        switch self {
+        case .github:
+            return .white.opacity(0.84)
+        case .huggingFace:
+            return Color(red: 1.0, green: 0.80, blue: 0.24)
+        }
+    }
+}
+
+private struct SourceLinkButton: View {
+    let kind: SourceLinkKind
+    let url: URL
+    let help: String
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            icon
+                .frame(width: 24, height: 20)
+                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch kind {
+        case .github:
+            GitHubMark()
+                .fill(kind.foregroundColor)
+                .frame(width: 13, height: 13)
+        case .huggingFace:
+            Text("🤗")
+                .font(.system(size: 12))
+        }
+    }
+}
+
+private struct GitHubMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let width = rect.width
+        let height = rect.height
+        let centerX = rect.midX
+        let headRadius = min(width, height) * 0.38
+        let headCenter = CGPoint(x: centerX, y: rect.minY + height * 0.53)
+
+        path.addEllipse(in: CGRect(
+            x: headCenter.x - headRadius,
+            y: headCenter.y - headRadius,
+            width: headRadius * 2,
+            height: headRadius * 2
+        ))
+
+        path.move(to: CGPoint(x: rect.minX + width * 0.20, y: rect.minY + height * 0.36))
+        path.addLine(to: CGPoint(x: rect.minX + width * 0.28, y: rect.minY + height * 0.05))
+        path.addLine(to: CGPoint(x: rect.minX + width * 0.48, y: rect.minY + height * 0.25))
+        path.closeSubpath()
+
+        path.move(to: CGPoint(x: rect.maxX - width * 0.20, y: rect.minY + height * 0.36))
+        path.addLine(to: CGPoint(x: rect.maxX - width * 0.28, y: rect.minY + height * 0.05))
+        path.addLine(to: CGPoint(x: rect.maxX - width * 0.48, y: rect.minY + height * 0.25))
+        path.closeSubpath()
+
+        path.addRoundedRect(in: CGRect(
+            x: centerX - width * 0.15,
+            y: rect.maxY - height * 0.26,
+            width: width * 0.30,
+            height: height * 0.22
+        ), cornerSize: CGSize(width: width * 0.07, height: height * 0.07))
+
+        return path
     }
 }
 
@@ -505,6 +623,60 @@ private extension TranscriptionBackend {
             return "bolt.fill"
         }
     }
+
+    var repositoryURL: URL {
+        switch self {
+        case .whisperCpp:
+            return URL(string: "https://github.com/ggml-org/whisper.cpp")!
+        case .fasterWhisper:
+            return URL(string: "https://github.com/SYSTRAN/faster-whisper")!
+        }
+    }
+}
+
+private extension TranscriptionRun {
+    var huggingFaceURL: URL? {
+        switch backend {
+        case .whisperCpp:
+            return URL(string: "https://huggingface.co/ggerganov/whisper.cpp")
+        case .fasterWhisper:
+            return fasterWhisperHuggingFaceURL
+        }
+    }
+
+    private var fasterWhisperHuggingFaceURL: URL? {
+        let model = modelDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty, !model.hasPrefix("/"), !model.hasPrefix("./"), !model.hasPrefix("../") else {
+            return URL(string: "https://huggingface.co/Systran")
+        }
+
+        let repoID: String
+        if model.contains("/") {
+            repoID = model
+        } else {
+            repoID = Self.fasterWhisperModelRepos[model] ?? "Systran/faster-whisper-\(model)"
+        }
+
+        return URL(string: "https://huggingface.co/\(repoID)")
+    }
+
+    private static let fasterWhisperModelRepos = [
+        "tiny": "Systran/faster-whisper-tiny",
+        "tiny.en": "Systran/faster-whisper-tiny.en",
+        "base": "Systran/faster-whisper-base",
+        "base.en": "Systran/faster-whisper-base.en",
+        "small": "Systran/faster-whisper-small",
+        "small.en": "Systran/faster-whisper-small.en",
+        "medium": "Systran/faster-whisper-medium",
+        "medium.en": "Systran/faster-whisper-medium.en",
+        "large-v1": "Systran/faster-whisper-large-v1",
+        "large-v2": "Systran/faster-whisper-large-v2",
+        "large-v3": "Systran/faster-whisper-large-v3",
+        "large": "Systran/faster-whisper-large-v3",
+        "distil-large-v3": "Systran/faster-distil-large-v3",
+        "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+    ]
 }
 
 private extension TranscriptionRunStatus {
