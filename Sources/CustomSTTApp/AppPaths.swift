@@ -3,7 +3,6 @@ import Foundation
 struct AppPaths {
     static let applicationName = "CustomSTT"
     static let defaultModelFileName = "ggml-large-v3-turbo-q5_0.bin"
-    static let defaultFasterWhisperModelName = "large-v3-turbo"
 
     static var applicationSupportDirectory: URL {
         createDirectory(at: userDirectory(.applicationSupportDirectory).appendingPathComponent(applicationName, isDirectory: true))
@@ -13,20 +12,8 @@ struct AppPaths {
         createDirectory(at: applicationSupportDirectory.appendingPathComponent("Models", isDirectory: true))
     }
 
-    static var fasterWhisperModelsDirectory: URL {
-        createDirectory(at: modelsDirectory.appendingPathComponent("FasterWhisper", isDirectory: true))
-    }
-
     static var recordingsDirectory: URL {
         createDirectory(at: applicationSupportDirectory.appendingPathComponent("Recordings", isDirectory: true))
-    }
-
-    static var cacheDirectory: URL {
-        createDirectory(at: userDirectory(.cachesDirectory).appendingPathComponent(applicationName, isDirectory: true))
-    }
-
-    static var huggingFaceCacheDirectory: URL {
-        createDirectory(at: cacheDirectory.appendingPathComponent("HuggingFace", isDirectory: true))
     }
 
     static var logsDirectory: URL {
@@ -43,28 +30,10 @@ struct AppPaths {
         logsDirectory.appendingPathComponent("whisper-last.log")
     }
 
-    static var fasterWhisperVirtualEnvironmentDirectory: URL {
-        applicationSupportDirectory.appendingPathComponent("faster-whisper-venv", isDirectory: true)
-    }
-
-    static var fasterWhisperVirtualEnvironmentPythonURL: URL {
-        fasterWhisperVirtualEnvironmentDirectory.appendingPathComponent("bin/python")
-    }
-
     static func defaultWhisperCLIURL() -> URL? {
         let candidates = [
             "/opt/homebrew/bin/whisper-cli",
             "/usr/local/bin/whisper-cli"
-        ]
-        return candidates.map(URL.init(fileURLWithPath:)).first { FileManager.default.isExecutableFile(atPath: $0.path) }
-    }
-
-    static func defaultPythonURL() -> URL? {
-        let candidates = [
-            fasterWhisperVirtualEnvironmentPythonURL.path,
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3"
         ]
         return candidates.map(URL.init(fileURLWithPath:)).first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }

@@ -1,41 +1,7 @@
 import Darwin
 import Foundation
 
-enum TranscriptionBackend: String, CaseIterable, Identifiable, Sendable {
-    case whisperCpp
-    case fasterWhisper
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .whisperCpp:
-            return "whisper.cpp"
-        case .fasterWhisper:
-            return "faster-whisper"
-        }
-    }
-
-    var shortTitle: String {
-        switch self {
-        case .whisperCpp:
-            return "cpp"
-        case .fasterWhisper:
-            return "faster"
-        }
-    }
-
-    var logFileName: String {
-        switch self {
-        case .whisperCpp:
-            return "whisper-cpp-last.log"
-        case .fasterWhisper:
-            return "faster-whisper-last.log"
-        }
-    }
-}
-
-enum TranscriptionRunStatus: Sendable {
+enum TranscriptionStatus: Sendable {
     case idle
     case preparing
     case running
@@ -53,138 +19,89 @@ enum TranscriptionRunStatus: Sendable {
     }
 }
 
-struct TranscriptionRun: Identifiable, Sendable {
-    let id: UUID
-    let backend: TranscriptionBackend
-    let title: String
-    let modelDescription: String
-    var status: TranscriptionRunStatus
-    var elapsed: TimeInterval
-    var duration: TimeInterval?
-    var transcript: String
-    var errorMessage: String?
-    var startedAt: Date?
-
-    var hasTranscript: Bool {
-        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
-
 @MainActor
 final class WhisperTranscriber: ObservableObject {
     @Published private(set) var isTranscribing = false
     @Published private(set) var isStoppingTranscription = false
-    @Published private(set) var runs: [TranscriptionRun]
+    @Published private(set) var status: TranscriptionStatus = .idle
+    @Published private(set) var transcriptionStartedAt: Date?
     @Published var transcript = ""
     @Published var errorMessage: String?
     @Published private(set) var currentTranscriptionElapsed: TimeInterval = 0
     @Published private(set) var lastTranscriptionDuration: TimeInterval?
 
     private let settings: AppSettings
-    private var activeControllers: [UUID: TranscriptionProcessController] = [:]
+    private let processController = TranscriptionProcessController()
     private var transcriptionTimer: Timer?
-    private var overallTranscriptionStartedAt: Date?
 
     init(settings: AppSettings) {
         self.settings = settings
-        runs = Self.idleRuns(settings: settings)
+    }
+
+    var modelDescription: String {
+        let modelPath = settings.expandedModelPath
+        guard !modelPath.isEmpty else { return "GGML model" }
+        return URL(fileURLWithPath: modelPath).lastPathComponent
     }
 
     func transcribe(audioURL: URL) async -> Bool {
         guard !isTranscribing else { return false }
+        guard let request = makeWhisperRequest() else { return false }
 
-        let preparedAt = Date()
-        let plan = comparisonPlan(startedAt: preparedAt)
-        runs = plan.runs
-        transcript = ""
-        errorMessage = nil
-
-        guard !plan.requests.isEmpty else {
-            errorMessage = "No transcription backend is ready. Check Settings."
-            return false
-        }
-
+        let startedAt = Date()
+        processController.resetCancellation()
         isTranscribing = true
         isStoppingTranscription = false
+        status = .preparing
+        transcriptionStartedAt = startedAt
         currentTranscriptionElapsed = 0
         lastTranscriptionDuration = nil
-        activeControllers = [:]
-
-        let overallStartedAt = Date()
-        overallTranscriptionStartedAt = overallStartedAt
-        startTranscriptionTimer()
+        errorMessage = nil
+        startTranscriptionTimer(startedAt: startedAt)
         defer {
-            lastTranscriptionDuration = Date().timeIntervalSince(overallStartedAt)
+            lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
             currentTranscriptionElapsed = lastTranscriptionDuration ?? currentTranscriptionElapsed
-            refreshElapsed()
             stopTranscriptionTimer()
-            overallTranscriptionStartedAt = nil
-            activeControllers.removeAll()
+            transcriptionStartedAt = nil
             isStoppingTranscription = false
             isTranscribing = false
         }
 
-        let normalizedAudioURL: URL
-        let preparationController = TranscriptionProcessController()
-        activeControllers[UUID()] = preparationController
-
         do {
-            normalizedAudioURL = try await Task.detached(priority: .userInitiated) {
-                try Self.normalizedWAVURL(for: audioURL, processController: preparationController)
+            let normalizedAudioURL = try await Task.detached(priority: .userInitiated) {
+                try Self.normalizedWAVURL(for: audioURL, processController: self.processController)
             }.value
-            activeControllers = activeControllers.filter { $0.value !== preparationController }
+
+            guard !isStoppingTranscription else {
+                status = .stopped
+                errorMessage = "Transcription stopped."
+                return false
+            }
+
+            status = .running
+            let result = try await Task.detached(priority: .userInitiated) {
+                try Self.runWhisper(audioURL: normalizedAudioURL, request: request, processController: self.processController)
+            }.value
+
+            transcript = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            status = .completed
+            return !transcript.isEmpty
         } catch TranscriptionCancellation.cancelled {
-            markActiveRunsAsStopped()
+            status = .stopped
             errorMessage = "Transcription stopped."
             return false
         } catch {
-            markActiveRunsAsFailed(error.localizedDescription)
+            status = .failed
             errorMessage = error.localizedDescription
             return false
         }
-
-        guard !isStoppingTranscription else {
-            markActiveRunsAsStopped()
-            errorMessage = "Transcription stopped."
-            return false
-        }
-
-        let modelStartedAt = Date()
-        markRequestsAsRunning(plan.requests, startedAt: modelStartedAt)
-
-        await withTaskGroup(of: TranscriptionJobOutcome.self) { group in
-            for request in plan.requests {
-                let controller = TranscriptionProcessController()
-                activeControllers[request.id] = controller
-                if isStoppingTranscription {
-                    controller.cancel()
-                }
-
-                group.addTask {
-                    Self.run(request: request, audioURL: normalizedAudioURL, processController: controller)
-                }
-            }
-
-            for await outcome in group {
-                activeControllers[outcome.id] = nil
-                apply(outcome)
-            }
-        }
-
-        let hasSuccessfulTranscript = runs.contains { $0.status == .completed && $0.hasTranscript }
-        if !hasSuccessfulTranscript, errorMessage == nil {
-            errorMessage = runs.compactMap(\.errorMessage).first
-        }
-        return hasSuccessfulTranscript
     }
 
     func stopTranscription() {
         guard isTranscribing else { return }
         isStoppingTranscription = true
         errorMessage = "Stopping transcription…"
-        for controller in activeControllers.values {
-            controller.cancel()
-        }
+        processController.cancel()
     }
 
     func appendToTranscript(_ text: String) {
@@ -203,162 +120,43 @@ final class WhisperTranscriber: ObservableObject {
         errorMessage = nil
         lastTranscriptionDuration = nil
         currentTranscriptionElapsed = 0
-        overallTranscriptionStartedAt = nil
-        runs = Self.idleRuns(settings: settings)
+        transcriptionStartedAt = nil
+        status = .idle
     }
 
-    func copyText(for runID: UUID) -> String {
-        guard let run = runs.first(where: { $0.id == runID }) else { return "" }
-        return run.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func combinedTranscript() -> String {
-        runs
-            .filter(\.hasTranscript)
-            .map { run in
-                "[\(run.title) · \(run.modelDescription)]\n\(run.transcript.trimmingCharacters(in: .whitespacesAndNewlines))"
-            }
-            .joined(separator: "\n\n")
-    }
-
-    private func comparisonPlan(startedAt: Date) -> TranscriptionPlan {
-        var requests: [PreparedTranscriptionRequest] = []
-        var plannedRuns: [TranscriptionRun] = []
-
-        let whisperCppValidation = makeWhisperCppRequest()
-        plannedRuns.append(whisperCppValidation.run(startedAt: startedAt))
-        if case let .ready(request) = whisperCppValidation {
-            requests.append(request)
-        }
-
-        if settings.useFasterWhisper {
-            let fasterWhisperValidation = makeFasterWhisperRequest()
-            plannedRuns.append(fasterWhisperValidation.run(startedAt: startedAt))
-            if case let .ready(request) = fasterWhisperValidation {
-                requests.append(request)
-            }
-        }
-
-        return TranscriptionPlan(requests: requests, runs: plannedRuns)
-    }
-
-    private func makeWhisperCppRequest() -> RequestValidation {
+    private func makeWhisperRequest() -> WhisperRequest? {
         let modelPath = settings.expandedModelPath
         let whisperCLIPath = settings.expandedWhisperCLIPath
-        let modelDescription = Self.modelDescription(forPath: modelPath, fallback: "GGML model")
 
         guard !modelPath.isEmpty else {
-            return .unavailable(backend: .whisperCpp, modelDescription: modelDescription, message: "Missing Whisper model. Run scripts/download-model.sh or set a model path.")
+            errorMessage = "Missing Whisper model. Run scripts/download-model.sh or set a model path."
+            status = .failed
+            return nil
         }
         guard FileManager.default.fileExists(atPath: modelPath) else {
-            return .unavailable(backend: .whisperCpp, modelDescription: modelDescription, message: "Whisper model not found at \(modelPath).")
+            errorMessage = "Whisper model not found at \(modelPath)."
+            status = .failed
+            return nil
         }
         guard !whisperCLIPath.isEmpty else {
-            return .unavailable(backend: .whisperCpp, modelDescription: modelDescription, message: "whisper-cli was not found. Install it with: brew install whisper-cpp")
+            errorMessage = "whisper-cli was not found. Install it with: brew install whisper-cpp"
+            status = .failed
+            return nil
         }
         guard FileManager.default.isExecutableFile(atPath: whisperCLIPath) else {
-            return .unavailable(backend: .whisperCpp, modelDescription: modelDescription, message: "whisper-cli not found or not executable at \(whisperCLIPath).")
+            errorMessage = "whisper-cli not found or not executable at \(whisperCLIPath)."
+            status = .failed
+            return nil
         }
 
-        return .ready(PreparedTranscriptionRequest(
-            id: UUID(),
-            backend: .whisperCpp,
-            modelDescription: modelDescription,
-            payload: .whisperCpp(whisperCLIPath: whisperCLIPath, modelPath: modelPath)
-        ))
+        return WhisperRequest(whisperCLIPath: whisperCLIPath, modelPath: modelPath)
     }
 
-    private func makeFasterWhisperRequest() -> RequestValidation {
-        let pythonPath = settings.expandedFasterWhisperPythonPath
-        let model = settings.resolvedFasterWhisperModel
-        let device = settings.fasterWhisperDevice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "auto" : settings.fasterWhisperDevice
-        let computeType = device == "cuda" ? "float16" : "int8"
-        let modelDescription = model.isEmpty ? AppPaths.defaultFasterWhisperModelName : model
-
-        guard !model.isEmpty else {
-            return .unavailable(backend: .fasterWhisper, modelDescription: modelDescription, message: "Missing faster-whisper model. Use a model name like large-v3-turbo or a local CTranslate2 model folder.")
-        }
-        if Self.isLocalPath(model), !FileManager.default.fileExists(atPath: model) {
-            return .unavailable(backend: .fasterWhisper, modelDescription: modelDescription, message: "faster-whisper model folder not found at \(model).")
-        }
-        guard !pythonPath.isEmpty else {
-            return .unavailable(backend: .fasterWhisper, modelDescription: modelDescription, message: "Missing Python executable. Run scripts/install-faster-whisper.sh or set a Python path.")
-        }
-        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
-            return .unavailable(backend: .fasterWhisper, modelDescription: modelDescription, message: "Python executable not found at \(pythonPath). Run scripts/install-faster-whisper.sh.")
-        }
-
-        return .ready(PreparedTranscriptionRequest(
-            id: UUID(),
-            backend: .fasterWhisper,
-            modelDescription: modelDescription,
-            payload: .fasterWhisper(pythonPath: pythonPath, model: model, device: device, computeType: computeType)
-        ))
-    }
-
-    private func markRequestsAsRunning(_ requests: [PreparedTranscriptionRequest], startedAt: Date) {
-        for request in requests {
-            guard let index = runs.firstIndex(where: { $0.id == request.id }) else { continue }
-            runs[index].status = .running
-            runs[index].startedAt = startedAt
-            runs[index].elapsed = 0
-            runs[index].duration = nil
-            runs[index].errorMessage = nil
-        }
-    }
-
-    private func markActiveRunsAsStopped() {
-        for index in runs.indices where runs[index].status.isActive {
-            runs[index].status = .stopped
-            runs[index].duration = runs[index].elapsed
-            runs[index].errorMessage = "Stopped"
-        }
-        updateCombinedTranscript()
-    }
-
-    private func markActiveRunsAsFailed(_ message: String) {
-        for index in runs.indices where runs[index].status.isActive {
-            runs[index].status = .failed
-            runs[index].duration = runs[index].elapsed
-            runs[index].errorMessage = message
-        }
-        updateCombinedTranscript()
-    }
-
-    private func apply(_ outcome: TranscriptionJobOutcome) {
-        guard let index = runs.firstIndex(where: { $0.id == outcome.id }) else { return }
-
-        switch outcome.result {
-        case let .success(text, duration):
-            runs[index].status = .completed
-            runs[index].duration = duration
-            runs[index].elapsed = duration
-            runs[index].transcript = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            runs[index].errorMessage = nil
-        case let .failure(message, duration):
-            runs[index].status = .failed
-            runs[index].duration = duration
-            runs[index].elapsed = duration
-            runs[index].errorMessage = message
-        case let .stopped(duration):
-            runs[index].status = .stopped
-            runs[index].duration = duration
-            runs[index].elapsed = duration
-            runs[index].errorMessage = "Stopped"
-        }
-
-        updateCombinedTranscript()
-    }
-
-    private func updateCombinedTranscript() {
-        transcript = combinedTranscript()
-    }
-
-    private func startTranscriptionTimer() {
+    private func startTranscriptionTimer(startedAt: Date) {
         transcriptionTimer?.invalidate()
         transcriptionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshElapsed()
+                self?.currentTranscriptionElapsed = Date().timeIntervalSince(startedAt)
             }
         }
     }
@@ -368,40 +166,9 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionTimer = nil
     }
 
-    private func refreshElapsed() {
-        let now = Date()
-        if let overallTranscriptionStartedAt, isTranscribing {
-            currentTranscriptionElapsed = now.timeIntervalSince(overallTranscriptionStartedAt)
-        }
-
-        for index in runs.indices where runs[index].status.isActive {
-            guard let startedAt = runs[index].startedAt else { continue }
-            runs[index].elapsed = now.timeIntervalSince(startedAt)
-        }
-    }
-
-    nonisolated private static func run(request: PreparedTranscriptionRequest, audioURL: URL, processController: TranscriptionProcessController) -> TranscriptionJobOutcome {
-        let startedAt = Date()
-
-        do {
-            let result: String
-            switch request.payload {
-            case let .whisperCpp(whisperCLIPath, modelPath):
-                result = try runWhisperCpp(audioURL: audioURL, whisperCLIPath: whisperCLIPath, modelPath: modelPath, processController: processController)
-            case let .fasterWhisper(pythonPath, model, device, computeType):
-                result = try runFasterWhisper(audioURL: audioURL, pythonPath: pythonPath, model: model, device: device, computeType: computeType, processController: processController)
-            }
-            return TranscriptionJobOutcome(id: request.id, result: .success(text: result, duration: Date().timeIntervalSince(startedAt)))
-        } catch TranscriptionCancellation.cancelled {
-            return TranscriptionJobOutcome(id: request.id, result: .stopped(duration: Date().timeIntervalSince(startedAt)))
-        } catch {
-            return TranscriptionJobOutcome(id: request.id, result: .failure(message: error.localizedDescription, duration: Date().timeIntervalSince(startedAt)))
-        }
-    }
-
-    nonisolated private static func runWhisperCpp(audioURL: URL, whisperCLIPath: String, modelPath: String, processController: TranscriptionProcessController) throws -> String {
-        let executableURL = URL(fileURLWithPath: whisperCLIPath)
-        let modelURL = URL(fileURLWithPath: modelPath)
+    nonisolated private static func runWhisper(audioURL: URL, request: WhisperRequest, processController: TranscriptionProcessController) throws -> String {
+        let executableURL = URL(fileURLWithPath: request.whisperCLIPath)
+        let modelURL = URL(fileURLWithPath: request.modelPath)
 
         let process = Process()
         process.executableURL = executableURL
@@ -419,46 +186,13 @@ final class WhisperTranscriber: ObservableObject {
 
         let processResult = try processController.run(process)
         let commandLine = "\(executableURL.path) \(process.arguments?.joined(separator: " ") ?? "")"
-        writeWhisperLog(backend: .whisperCpp, commandLine: commandLine, processResult: processResult)
+        writeWhisperLog(commandLine: commandLine, processResult: processResult)
 
         if processResult.wasCancelled {
             throw TranscriptionCancellation.cancelled
         }
         guard processResult.terminationStatus == 0 else {
             throw TranscriptionError.processFailed(commandName: "whisper-cli", status: processResult.terminationStatus, stderr: processResult.stderrText)
-        }
-
-        return processResult.stdoutText
-    }
-
-    nonisolated private static func runFasterWhisper(audioURL: URL, pythonPath: String, model: String, device: String, computeType: String, processController: TranscriptionProcessController) throws -> String {
-        let executableURL = URL(fileURLWithPath: pythonPath)
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = [
-            "-c", fasterWhisperPythonScript,
-            "--audio", audioURL.path,
-            "--model", model,
-            "--device", device,
-            "--compute-type", computeType
-        ]
-
-        var environment = ProcessInfo.processInfo.environment
-        environment["CUSTOM_STT_FASTER_WHISPER_DOWNLOAD_ROOT"] = AppPaths.fasterWhisperModelsDirectory.path
-        environment["HF_HOME"] = AppPaths.huggingFaceCacheDirectory.path
-        environment["XDG_CACHE_HOME"] = AppPaths.cacheDirectory.path
-        environment["TOKENIZERS_PARALLELISM"] = "false"
-        process.environment = environment
-
-        let processResult = try processController.run(process)
-        let commandLine = "\(executableURL.path) -c <faster-whisper transcriber> --audio \(audioURL.path) --model \(model) --device \(device) --compute-type \(computeType)"
-        writeWhisperLog(backend: .fasterWhisper, commandLine: commandLine, processResult: processResult)
-
-        if processResult.wasCancelled {
-            throw TranscriptionCancellation.cancelled
-        }
-        guard processResult.terminationStatus == 0 else {
-            throw TranscriptionError.processFailed(commandName: "faster-whisper", status: processResult.terminationStatus, stderr: processResult.stderrText)
         }
 
         return processResult.stdoutText
@@ -492,66 +226,14 @@ final class WhisperTranscriber: ObservableObject {
         return outputURL
     }
 
-    nonisolated private static func writeWhisperLog(backend: TranscriptionBackend, commandLine: String, processResult: ProcessRunResult) {
-        let log = formattedLog(backend: backend, commandLine: commandLine, processResult: processResult)
-        let backendLogURL = AppPaths.logsDirectory.appendingPathComponent(backend.logFileName)
-        writeLog(log, to: backendLogURL)
-        writeLog(log, to: AppPaths.whisperLogURL)
-    }
-
-    nonisolated private static func formattedLog(backend: TranscriptionBackend, commandLine: String, processResult: ProcessRunResult) -> String {
+    nonisolated private static func writeWhisperLog(commandLine: String, processResult: ProcessRunResult) {
         let cancellationText = processResult.wasCancelled ? "yes" : "no"
-        return "backend: \(backend.title)\ncancelled: \(cancellationText)\ncommand: \(commandLine)\n\nSTDOUT\n\(processResult.stdoutText)\n\nSTDERR\n\(processResult.stderrText)\n"
-    }
-
-    nonisolated private static func writeLog(_ log: String, to url: URL) {
+        let log = "backend: whisper.cpp\ncancelled: \(cancellationText)\ncommand: \(commandLine)\n\nSTDOUT\n\(processResult.stdoutText)\n\nSTDERR\n\(processResult.stderrText)\n"
         do {
-            try log.write(to: url, atomically: true, encoding: .utf8)
+            try log.write(to: AppPaths.whisperLogURL, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("CustomSTT: could not write transcription log to %@: %@", url.path, error.localizedDescription)
+            NSLog("CustomSTT: could not write Whisper log to %@: %@", AppPaths.whisperLogURL.path, error.localizedDescription)
         }
-    }
-
-    nonisolated private static func isLocalPath(_ model: String) -> Bool {
-        model.hasPrefix("/") || model.hasPrefix("./") || model.hasPrefix("../")
-    }
-
-    nonisolated private static func modelDescription(forPath path: String, fallback: String) -> String {
-        guard !path.isEmpty else { return fallback }
-        return URL(fileURLWithPath: path).lastPathComponent
-    }
-
-    private static func idleRuns(settings: AppSettings) -> [TranscriptionRun] {
-        var idleRuns = [TranscriptionRun(
-            id: UUID(),
-            backend: .whisperCpp,
-            title: TranscriptionBackend.whisperCpp.title,
-            modelDescription: modelDescription(forPath: settings.expandedModelPath, fallback: "GGML model"),
-            status: .idle,
-            elapsed: 0,
-            duration: nil,
-            transcript: "",
-            errorMessage: nil,
-            startedAt: nil
-        )]
-
-        if settings.useFasterWhisper {
-            let fasterWhisperModel = settings.resolvedFasterWhisperModel.isEmpty ? AppPaths.defaultFasterWhisperModelName : settings.resolvedFasterWhisperModel
-            idleRuns.append(TranscriptionRun(
-                id: UUID(),
-                backend: .fasterWhisper,
-                title: TranscriptionBackend.fasterWhisper.title,
-                modelDescription: fasterWhisperModel,
-                status: .idle,
-                elapsed: 0,
-                duration: nil,
-                transcript: "",
-                errorMessage: nil,
-                startedAt: nil
-            ))
-        }
-
-        return idleRuns
     }
 
     nonisolated static func defaultWhisperCLIURL() -> URL? {
@@ -561,105 +243,11 @@ final class WhisperTranscriber: ObservableObject {
     nonisolated static func defaultModelURL() -> URL? {
         AppPaths.defaultModelURL()
     }
-
-    nonisolated private static let fasterWhisperPythonScript = """
-import argparse
-import os
-import sys
-
-try:
-    from faster_whisper import WhisperModel
-except Exception as error:
-    print("faster-whisper Python package is not installed for this Python executable.", file=sys.stderr)
-    print("Install it with: scripts/install-faster-whisper.sh", file=sys.stderr)
-    print(f"Import error: {error}", file=sys.stderr)
-    raise SystemExit(127)
-
-parser = argparse.ArgumentParser(description="Transcribe audio with faster-whisper for CustomSTT.")
-parser.add_argument("--audio", required=True)
-parser.add_argument("--model", required=True)
-parser.add_argument("--device", default="auto")
-parser.add_argument("--compute-type", default="int8")
-args = parser.parse_args()
-
-download_root = os.environ.get("CUSTOM_STT_FASTER_WHISPER_DOWNLOAD_ROOT") or None
-model = WhisperModel(
-    args.model,
-    device=args.device,
-    compute_type=args.compute_type,
-    download_root=download_root,
-)
-segments, _ = model.transcribe(args.audio, language=None, beam_size=5, vad_filter=True)
-
-for segment in segments:
-    text = segment.text.strip()
-    if text:
-        print(text, flush=True)
-"""
 }
 
-private struct TranscriptionPlan {
-    let requests: [PreparedTranscriptionRequest]
-    let runs: [TranscriptionRun]
-}
-
-private enum RequestValidation {
-    case ready(PreparedTranscriptionRequest)
-    case unavailable(backend: TranscriptionBackend, modelDescription: String, message: String)
-
-    func run(startedAt: Date) -> TranscriptionRun {
-        switch self {
-        case let .ready(request):
-            return TranscriptionRun(
-                id: request.id,
-                backend: request.backend,
-                title: request.backend.title,
-                modelDescription: request.modelDescription,
-                status: .preparing,
-                elapsed: 0,
-                duration: nil,
-                transcript: "",
-                errorMessage: nil,
-                startedAt: startedAt
-            )
-        case let .unavailable(backend, modelDescription, message):
-            return TranscriptionRun(
-                id: UUID(),
-                backend: backend,
-                title: backend.title,
-                modelDescription: modelDescription,
-                status: .failed,
-                elapsed: 0,
-                duration: nil,
-                transcript: "",
-                errorMessage: message,
-                startedAt: nil
-            )
-        }
-    }
-}
-
-private struct PreparedTranscriptionRequest: Sendable {
-    let id: UUID
-    let backend: TranscriptionBackend
-    let modelDescription: String
-    let payload: TranscriptionRequestPayload
-}
-
-private enum TranscriptionRequestPayload: Sendable {
-    case whisperCpp(whisperCLIPath: String, modelPath: String)
-    case fasterWhisper(pythonPath: String, model: String, device: String, computeType: String)
-}
-
-private struct TranscriptionJobOutcome: Sendable {
-    let id: UUID
-    let result: TranscriptionJobResult
-}
-
-private enum TranscriptionJobResult: Sendable {
-    case success(text: String, duration: TimeInterval)
-    case failure(message: String, duration: TimeInterval)
-    case stopped(duration: TimeInterval)
+private struct WhisperRequest: Sendable {
+    let whisperCLIPath: String
+    let modelPath: String
 }
 
 private enum TranscriptionCancellation: Error {
@@ -677,6 +265,13 @@ private final class TranscriptionProcessController: @unchecked Sendable {
     private let lock = NSLock()
     private var currentProcess: Process?
     private var cancellationRequested = false
+
+    func resetCancellation() {
+        lock.lock()
+        cancellationRequested = false
+        currentProcess = nil
+        lock.unlock()
+    }
 
     func cancel() {
         lock.lock()
