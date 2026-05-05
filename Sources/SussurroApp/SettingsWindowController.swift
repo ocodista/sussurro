@@ -11,12 +11,12 @@ final class SettingsWindowController: NSWindowController {
         self.settings = settings
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 640),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Custom STT Settings"
+        window.title = "Sussurro Settings"
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

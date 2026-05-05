@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="CustomSTT"
-BUNDLE_ID="local.custom-stt.swiftui"
+APP_NAME="Sussurro"
+BUNDLE_ID="com.ocodista.sussurro"
 CONFIG="release"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -30,7 +30,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>
-  <string>Custom STT</string>
+  <string>Sussurro</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -42,7 +42,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Custom STT records microphone audio locally so whisper.cpp can transcribe it into text.</string>
+  <string>Sussurro records microphone audio locally so whisper.cpp can transcribe it into text.</string>
 </dict>
 </plist>
 PLIST

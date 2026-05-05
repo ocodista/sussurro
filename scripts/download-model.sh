@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_SUPPORT_DIR="$HOME/Library/Application Support/CustomSTT"
-MODELS_DIR="${CUSTOM_STT_MODELS_DIR:-$APP_SUPPORT_DIR/Models}"
+APP_SUPPORT_DIR="$HOME/Library/Application Support/Sussurro"
+MODELS_DIR="${SUSSURRO_MODELS_DIR:-${CUSTOM_STT_MODELS_DIR:-$APP_SUPPORT_DIR/Models}}"
 mkdir -p "$MODELS_DIR"
 
 choice="${1:-turbo}"
@@ -28,6 +28,7 @@ esac
 
 target="$MODELS_DIR/$file"
 legacy_target="$ROOT/Models/$file"
+legacy_app_target="$HOME/Library/Application Support/CustomSTT/Models/$file"
 
 if [[ -f "$target" || -L "$target" ]]; then
   echo "Model already exists: $target"
@@ -37,6 +38,13 @@ fi
 if [[ -f "$legacy_target" || -L "$legacy_target" ]]; then
   echo "Using existing project model: $legacy_target"
   cp -pP "$legacy_target" "$target"
+  echo "Installed model at standard app data path: $target"
+  exit 0
+fi
+
+if [[ -f "$legacy_app_target" || -L "$legacy_app_target" ]]; then
+  echo "Using existing CustomSTT model: $legacy_app_target"
+  cp -pP "$legacy_app_target" "$target"
   echo "Installed model at standard app data path: $target"
   exit 0
 fi

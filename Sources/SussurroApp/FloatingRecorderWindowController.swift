@@ -15,7 +15,7 @@ final class FloatingRecorderWindowController: NSWindowController {
             defer: false
         )
 
-        panel.title = "Custom STT"
+        panel.title = "Sussurro"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = true

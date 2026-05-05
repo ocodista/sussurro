@@ -45,7 +45,7 @@ struct RecorderView: View {
                 .shadow(color: statusColor.opacity(0.55), radius: recorder.isRecording ? 6 : 0)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Custom STT")
+                Text("Sussurro")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.92))
 

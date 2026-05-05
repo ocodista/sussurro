@@ -199,7 +199,7 @@ final class WhisperTranscriber: ObservableObject {
     nonisolated private static func runWhisper(audioURL: URL, request: WhisperRequest, processController: TranscriptionProcessController) throws -> WhisperResult {
         let executableURL = URL(fileURLWithPath: request.whisperCLIPath)
         let modelURL = URL(fileURLWithPath: request.modelPath)
-        let outputBaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("custom-stt-whisper-\(UUID().uuidString)")
+        let outputBaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sussurro-whisper-\(UUID().uuidString)")
         let jsonOutputURL = outputBaseURL.appendingPathExtension("json")
         defer { try? FileManager.default.removeItem(at: jsonOutputURL) }
 
@@ -277,7 +277,7 @@ final class WhisperTranscriber: ObservableObject {
         do {
             try log.write(to: AppPaths.whisperLogURL, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("CustomSTT: could not write Whisper log to %@: %@", AppPaths.whisperLogURL.path, error.localizedDescription)
+            NSLog("Sussurro: could not write Whisper log to %@: %@", AppPaths.whisperLogURL.path, error.localizedDescription)
         }
     }
 

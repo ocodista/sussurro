@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "CustomSTT",
+    name: "Sussurro",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "CustomSTT", targets: ["CustomSTTApp"])
+        .executable(name: "Sussurro", targets: ["SussurroApp"])
     ],
     targets: [
         .executableTarget(
-            name: "CustomSTTApp",
-            path: "Sources/CustomSTTApp"
+            name: "SussurroApp",
+            path: "Sources/SussurroApp"
         )
     ]
 )
