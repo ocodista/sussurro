@@ -7,7 +7,7 @@ A small local macOS speech-to-text app:
 - Linear-inspired dark floating UI
 - fast local transcription through `whisper.cpp` (`whisper-cli`)
 - stop/cancel button while transcription is running
-- native macOS Settings window for model and executable paths
+- native macOS Settings window for input device, model, and executable paths
 - live and final transcription duration
 - detected language pill with flags for Portuguese, English, and Spanish
 - records audio to the standard macOS app data folder
@@ -69,10 +69,11 @@ GGML model choices:
 
 1. Open the app.
 2. Keep the floating window above whatever you are working on.
-3. Press **Record**, space, or **⌘⌥M**.
-4. Speak.
-5. Press **Stop**, space, or **⌘⌥M**.
-6. Wait for whisper.cpp transcription; the result appears in the text box and is copied to the clipboard.
+3. Choose an input from the **Input** menu, or keep **Default system input**.
+4. Press **Record**, space, or **⌘⌥M**.
+5. Speak.
+6. Press **Stop**, space, or **⌘⌥M**.
+7. Wait for whisper.cpp transcription; the result appears in the text box and is copied to the clipboard.
 
 Click the gear button or use **CustomSTT → Settings…** to edit paths.
 

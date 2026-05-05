@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 import Foundation
 
@@ -7,6 +8,8 @@ final class AudioRecorder: ObservableObject {
         case microphoneDenied
         case noInputFormat
         case missingRecordingFile
+        case selectedInputUnavailable
+        case inputDeviceConfigurationFailed(OSStatus)
 
         var errorDescription: String? {
             switch self {
@@ -16,6 +19,10 @@ final class AudioRecorder: ObservableObject {
                 return "Could not read the microphone input format."
             case .missingRecordingFile:
                 return "Recording stopped, but no audio file was produced."
+            case .selectedInputUnavailable:
+                return "Selected audio input is unavailable. Choose another input or use the default system input."
+            case let .inputDeviceConfigurationFailed(status):
+                return "Could not use the selected audio input (Core Audio status \(status))."
             }
         }
     }
@@ -25,11 +32,16 @@ final class AudioRecorder: ObservableObject {
     @Published private(set) var levels: [Float] = Array(repeating: 0.02, count: 72)
     @Published var errorMessage: String?
 
+    private let settings: AppSettings
     private let engine = AVAudioEngine()
     private var audioFile: AVAudioFile?
     private var recordingURL: URL?
     private var startedAt: Date?
     private var timer: Timer?
+
+    init(settings: AppSettings) {
+        self.settings = settings
+    }
 
     func requestMicrophoneAccess() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -60,6 +72,7 @@ final class AudioRecorder: ObservableObject {
         do {
             let url = nextRecordingURL()
             let inputNode = engine.inputNode
+            try configureSelectedInputDevice(on: inputNode)
             let format = inputNode.outputFormat(forBus: 0)
             guard format.channelCount > 0, format.sampleRate > 0 else {
                 throw RecorderError.noInputFormat
@@ -123,6 +136,39 @@ final class AudioRecorder: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRecording = false
+    }
+
+    private func configureSelectedInputDevice(on inputNode: AVAudioInputNode) throws {
+        let selectedInputDeviceUID = settings.selectedInputDeviceUID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let deviceID: AudioDeviceID
+
+        if selectedInputDeviceUID.isEmpty {
+            guard let defaultDeviceID = try AudioInputDeviceStore.defaultInputDeviceID() else { return }
+            deviceID = defaultDeviceID
+        } else {
+            guard let selectedDeviceID = try AudioInputDeviceStore.inputDeviceID(forUID: selectedInputDeviceUID) else {
+                throw RecorderError.selectedInputUnavailable
+            }
+            deviceID = selectedDeviceID
+        }
+
+        guard let audioUnit = inputNode.audioUnit else {
+            throw RecorderError.inputDeviceConfigurationFailed(-1)
+        }
+
+        var selectedDeviceID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &selectedDeviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+
+        guard status == noErr else {
+            throw RecorderError.inputDeviceConfigurationFailed(status)
+        }
     }
 
     private func nextRecordingURL() -> URL {

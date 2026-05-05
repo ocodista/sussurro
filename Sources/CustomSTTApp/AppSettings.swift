@@ -12,6 +12,10 @@ final class AppSettings: ObservableObject {
         didSet { save(whisperCLIPath, forKey: Self.whisperCLIPathKey) }
     }
 
+    @Published var selectedInputDeviceUID: String {
+        didSet { save(selectedInputDeviceUID, forKey: Self.selectedInputDeviceUIDKey) }
+    }
+
     var expandedModelPath: String {
         AppPaths.expandedPath(modelPath.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -22,6 +26,7 @@ final class AppSettings: ObservableObject {
 
     private static let modelPathKey = "modelPath"
     private static let whisperCLIPathKey = "whisperCLIPath"
+    private static let selectedInputDeviceUIDKey = "selectedInputDeviceUID"
 
     private let userDefaults: UserDefaults
 
@@ -29,6 +34,7 @@ final class AppSettings: ObservableObject {
         self.userDefaults = userDefaults
         modelPath = userDefaults.string(forKey: Self.modelPathKey) ?? Self.defaultModelPath()
         whisperCLIPath = userDefaults.string(forKey: Self.whisperCLIPathKey) ?? Self.defaultWhisperCLIPath()
+        selectedInputDeviceUID = userDefaults.string(forKey: Self.selectedInputDeviceUIDKey) ?? ""
     }
 
     func resetPathsToDefaults() {

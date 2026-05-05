@@ -19,6 +19,7 @@ struct RecorderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             header
+            AudioInputPicker(settings: settings, isDisabled: recorder.isRecording, compact: true)
             WaveformView(levels: recorder.levels, isRecording: recorder.isRecording)
             controls
             transcriptionCard
@@ -27,7 +28,7 @@ struct RecorderView: View {
         .padding(.top, 52)
         .padding(.horizontal, 40)
         .padding(.bottom, 34)
-        .frame(minWidth: 600, minHeight: 520)
+        .frame(minWidth: 600, minHeight: 560)
         .background(Color(red: 0.065, green: 0.067, blue: 0.078))
         .preferredColorScheme(.dark)
         .onAppear(perform: registerGlobalHotKey)

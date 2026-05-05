@@ -9,6 +9,8 @@ struct SettingsView: View {
             Text("Settings")
                 .font(.title3.weight(.semibold))
 
+            AudioInputPicker(settings: settings, includeRefreshButton: true)
+
             whisperCppSettings
 
             VStack(alignment: .leading, spacing: 6) {
