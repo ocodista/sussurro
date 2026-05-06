@@ -15,16 +15,18 @@ A small local macOS speech-to-text app powered by `whisper.cpp`.
 - [First-time setup](#first-time-setup)
 - [How to use](#how-to-use)
 - [Features](#features)
+- [Privacy and safety](#privacy-and-safety)
 - [Models](#models)
 - [Paths](#paths)
 - [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ## How to run
 
 ### Install
 
 ```bash
-git clone git@github.com:ocodista/sussurro.git
+git clone https://github.com/ocodista/sussurro.git
 cd sussurro
 scripts/install-app.sh
 ```
@@ -76,7 +78,14 @@ You can also download a model from Settings.
 - local transcription through `whisper.cpp`
 - model download and path settings
 - transcription status, duration, and language display
-- clipboard copy and command logs
+- clipboard copy and diagnostic command logs
+
+## Privacy and safety
+
+- Transcription runs locally through `whisper.cpp`; Sussurro does not send audio or transcripts to an app server.
+- Recordings are stored locally in `~/Library/Application Support/Sussurro/Recordings/` until you delete them.
+- Successful transcripts are copied to the macOS clipboard, where other apps may be able to read them.
+- Diagnostic logs intentionally omit transcript text. They keep command metadata and `whisper-cli` stderr for troubleshooting.
 
 ## Models
 
@@ -109,3 +118,7 @@ Common fixes:
 brew install whisper-cpp
 scripts/download-model.sh turbo
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).

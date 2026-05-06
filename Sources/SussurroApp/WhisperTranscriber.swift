@@ -47,28 +47,24 @@ final class WhisperTranscriber: ObservableObject {
 
     var detectedLanguageDisplay: String? {
         guard let detectedLanguageCode else { return nil }
-        let normalizedCode = Self.normalizedLanguageCode(detectedLanguageCode)
-        let languageName = Locale.current.localizedString(forLanguageCode: normalizedCode) ?? normalizedCode.uppercased()
-        let flagPrefix = Self.languageFlag(for: normalizedCode).map { "\($0) " } ?? ""
-        return "\(flagPrefix)\(normalizedCode.uppercased()) · \(languageName.capitalized)"
+        return Self.languageDisplayCode(for: detectedLanguageCode)
     }
 
-    private static func normalizedLanguageCode(_ code: String) -> String {
+    nonisolated static func languageDisplayCode(for code: String) -> String {
+        let normalizedCode = normalizedLanguageCode(code)
+        switch normalizedCode {
+        case "pt":
+            return "PT-BR"
+        case "en":
+            return "EN-US"
+        default:
+            return normalizedCode.uppercased()
+        }
+    }
+
+    nonisolated private static func normalizedLanguageCode(_ code: String) -> String {
         let normalizedCode = code.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         return normalizedCode.split { $0 == "-" || $0 == "_" }.first.map(String.init) ?? normalizedCode
-    }
-
-    private static func languageFlag(for code: String) -> String? {
-        switch code {
-        case "pt":
-            return "🇧🇷"
-        case "en":
-            return "🇺🇸"
-        case "es":
-            return "🇪🇸"
-        default:
-            return nil
-        }
     }
 
     func transcribe(audioURL: URL) async -> Bool {
@@ -99,6 +95,7 @@ final class WhisperTranscriber: ObservableObject {
             let normalizedAudioURL = try await Task.detached(priority: .userInitiated) {
                 try Self.normalizedWAVURL(for: audioURL, processController: self.processController)
             }.value
+            defer { try? FileManager.default.removeItem(at: normalizedAudioURL) }
 
             guard !isStoppingTranscription else {
                 status = .stopped
@@ -221,7 +218,7 @@ final class WhisperTranscriber: ObservableObject {
 
         let processResult = try processController.run(process)
         let languageCode = detectedLanguageCode(from: jsonOutputURL)
-        let commandLine = "\(executableURL.path) \(process.arguments?.joined(separator: " ") ?? "")"
+        let commandLine = commandDisplayLine(executableURL: executableURL, arguments: process.arguments ?? [])
         writeWhisperLog(commandLine: commandLine, processResult: processResult, languageCode: languageCode)
 
         if processResult.wasCancelled {
@@ -273,12 +270,51 @@ final class WhisperTranscriber: ObservableObject {
     nonisolated private static func writeWhisperLog(commandLine: String, processResult: ProcessRunResult, languageCode: String?) {
         let cancellationText = processResult.wasCancelled ? "yes" : "no"
         let languageText = languageCode ?? "unknown"
-        let log = "backend: whisper.cpp\ncancelled: \(cancellationText)\nlanguage: \(languageText)\ncommand: \(commandLine)\n\nSTDOUT\n\(processResult.stdoutText)\n\nSTDERR\n\(processResult.stderrText)\n"
+        let stdoutByteCount = processResult.stdoutText.lengthOfBytes(using: .utf8)
+        let stderrText = redactedDiagnosticText(processResult.stderrText)
+        let log = """
+        backend: whisper.cpp
+        cancelled: \(cancellationText)
+        language: \(languageText)
+        command: \(commandLine)
+        transcript_logged: no
+        stdout_bytes: \(stdoutByteCount)
+
+        STDOUT
+        <redacted: whisper stdout contains transcript text>
+
+        STDERR
+        \(stderrText)
+        """
         do {
             try log.write(to: AppPaths.whisperLogURL, atomically: true, encoding: .utf8)
         } catch {
             NSLog("Sussurro: could not write Whisper log to %@: %@", AppPaths.whisperLogURL.path, error.localizedDescription)
         }
+    }
+
+    nonisolated private static func redactedDiagnosticText(_ text: String) -> String {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        guard !homePath.isEmpty else { return text }
+        return text.replacingOccurrences(of: homePath, with: "~")
+    }
+
+    nonisolated private static func commandDisplayLine(executableURL: URL, arguments: [String]) -> String {
+        ([executableURL.path] + arguments)
+            .map(commandDisplayArgument(_:))
+            .joined(separator: " ")
+    }
+
+    nonisolated private static func commandDisplayArgument(_ argument: String) -> String {
+        let displayArgument = argument.hasPrefix("/") ? AppPaths.abbreviatedPath(URL(fileURLWithPath: argument)) : argument
+        guard displayArgument.rangeOfCharacter(from: .whitespacesAndNewlines) != nil else {
+            return displayArgument
+        }
+
+        let escapedArgument = displayArgument
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escapedArgument)\""
     }
 
     nonisolated static func defaultWhisperCLIURL() -> URL? {

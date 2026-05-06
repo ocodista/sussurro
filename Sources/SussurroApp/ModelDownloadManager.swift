@@ -56,6 +56,10 @@ final class ModelDownloadManager: ObservableObject {
                 throw ModelDownloadError.badServerResponse(httpResponse.statusCode)
             }
 
+            guard try Self.downloadedFileIsNotEmpty(at: temporaryURL) else {
+                throw ModelDownloadError.emptyDownload
+            }
+
             try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: destinationURL)
             try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
@@ -68,11 +72,18 @@ final class ModelDownloadManager: ObservableObject {
             state = .failed(error.localizedDescription)
         }
     }
+
+    nonisolated private static func downloadedFileIsNotEmpty(at url: URL) throws -> Bool {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let fileSize = attributes[.size] as? NSNumber else { return false }
+        return fileSize.int64Value > 0
+    }
 }
 
 enum ModelDownloadError: LocalizedError {
     case missingHTTPResponse
     case badServerResponse(Int)
+    case emptyDownload
 
     var errorDescription: String? {
         switch self {
@@ -80,6 +91,8 @@ enum ModelDownloadError: LocalizedError {
             return "The model download did not return an HTTP response."
         case let .badServerResponse(statusCode):
             return "The model download failed with HTTP \(statusCode)."
+        case .emptyDownload:
+            return "The downloaded model file is empty."
         }
     }
 }

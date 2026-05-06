@@ -2,7 +2,6 @@ import Foundation
 
 struct AppPaths {
     static let applicationName = "Sussurro"
-    static let legacyApplicationName = "CustomSTT"
     static let defaultModelFileName = "ggml-large-v3-turbo-q5_0.bin"
 
     static var applicationSupportDirectory: URL {
@@ -11,12 +10,6 @@ struct AppPaths {
 
     static var modelsDirectory: URL {
         createDirectory(at: applicationSupportDirectory.appendingPathComponent("Models", isDirectory: true))
-    }
-
-    static var legacyModelsDirectory: URL {
-        userDirectory(.applicationSupportDirectory)
-            .appendingPathComponent(legacyApplicationName, isDirectory: true)
-            .appendingPathComponent("Models", isDirectory: true)
     }
 
     static var recordingsDirectory: URL {
@@ -50,28 +43,9 @@ struct AppPaths {
     }
 
     static func defaultModelURL() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let projectModelsDirectory = home.appendingPathComponent("personal/sussurro/Models", isDirectory: true)
-        let legacyProjectModelsDirectory = home.appendingPathComponent("personal/custom-stt-swift_ui/Models", isDirectory: true)
-        let candidates = [
-            modelsDirectory.appendingPathComponent(defaultModelFileName),
-            modelsDirectory.appendingPathComponent("ggml-base.bin"),
-            modelsDirectory.appendingPathComponent("ggml-small.bin"),
-            legacyModelsDirectory.appendingPathComponent(defaultModelFileName),
-            legacyModelsDirectory.appendingPathComponent("ggml-base.bin"),
-            legacyModelsDirectory.appendingPathComponent("ggml-small.bin"),
-            home.appendingPathComponent(".whisper-models/ggml-large-v3-turbo-q5_0.bin"),
-            home.appendingPathComponent("Library/Application Support/superwhisper/ggml-large-v3-turbo.bin"),
-            home.appendingPathComponent("Library/Application Support/superwhisper/ggml-small.en.bin"),
-            home.appendingPathComponent("personal/whisper_bun/models/ggml-base.en.bin"),
-            projectModelsDirectory.appendingPathComponent(defaultModelFileName),
-            projectModelsDirectory.appendingPathComponent("ggml-base.bin"),
-            projectModelsDirectory.appendingPathComponent("ggml-small.bin"),
-            legacyProjectModelsDirectory.appendingPathComponent(defaultModelFileName),
-            legacyProjectModelsDirectory.appendingPathComponent("ggml-base.bin"),
-            legacyProjectModelsDirectory.appendingPathComponent("ggml-small.bin")
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        WhisperModelPreset.allCases
+            .map(modelURL(for:))
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     static func expandedPath(_ path: String) -> String {

@@ -21,7 +21,7 @@ DerivedData/
 /dist/
 *.dSYM/
 
-# Generated app data from older project-local versions
+# Local app data
 /Logs/
 /Recordings/
 /Models/

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_SUPPORT_DIR="$HOME/Library/Application Support/Sussurro"
-MODELS_DIR="${SUSSURRO_MODELS_DIR:-${CUSTOM_STT_MODELS_DIR:-$APP_SUPPORT_DIR/Models}}"
+MODELS_DIR="${SUSSURRO_MODELS_DIR:-$APP_SUPPORT_DIR/Models}"
 mkdir -p "$MODELS_DIR"
 
 choice="${1:-turbo}"
@@ -27,29 +26,26 @@ case "$choice" in
 esac
 
 target="$MODELS_DIR/$file"
-legacy_target="$ROOT/Models/$file"
-legacy_app_target="$HOME/Library/Application Support/CustomSTT/Models/$file"
+temporary_target="$target.tmp"
+
+cleanup() {
+  rm -f "$temporary_target"
+}
+trap cleanup EXIT
 
 if [[ -f "$target" || -L "$target" ]]; then
   echo "Model already exists: $target"
   exit 0
 fi
 
-if [[ -f "$legacy_target" || -L "$legacy_target" ]]; then
-  echo "Using existing project model: $legacy_target"
-  cp -pP "$legacy_target" "$target"
-  echo "Installed model at standard app data path: $target"
-  exit 0
-fi
-
-if [[ -f "$legacy_app_target" || -L "$legacy_app_target" ]]; then
-  echo "Using existing CustomSTT model: $legacy_app_target"
-  cp -pP "$legacy_app_target" "$target"
-  echo "Installed model at standard app data path: $target"
-  exit 0
-fi
-
 echo "Downloading $file to $target"
-curl -L --fail --progress-bar "$url" -o "$target.tmp"
-mv "$target.tmp" "$target"
+curl -L --fail --progress-bar "$url" -o "$temporary_target"
+
+if [[ ! -s "$temporary_target" ]]; then
+  echo "Downloaded model is empty: $temporary_target" >&2
+  exit 1
+fi
+
+mv "$temporary_target" "$target"
+trap - EXIT
 echo "Done: $target"
