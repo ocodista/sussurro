@@ -19,6 +19,14 @@
 | macOS native, wall time | 36.58s | 0.0823x | Roughly tied |
 | macOS native, engine time | 34.98s | 0.0787x | Slightly faster without CLI overhead |
 
+```mermaid
+xychart-beta
+    title "Total transcription time (lower is better)"
+    x-axis ["whisper.cpp", "Native wall", "Native engine"]
+    y-axis "Seconds" 0 --> 40
+    bar [36.41, 36.58, 34.98]
+```
+
 Speed was effectively tied. Native may be slightly faster when integrated directly in the app.
 
 ## Quality

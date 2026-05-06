@@ -2,12 +2,13 @@
   <img src="Sources/SussurroApp/Resources/sussurro-logo.png" alt="Sussurro logo" width="160">
 </p>
 
-<h1 align="center">Sussurro</h1>
+# Sussurro
 
-A small offline macOS speech-to-text app powered by [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
+A small offline macOS speech-to-text app powered by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) written in Swift.
 
 **Contents**
 
+- [Demo](#demo)
 - [How to run](#how-to-run)
   - [Install](#install)
   - [Open](#open)
@@ -20,6 +21,10 @@ A small offline macOS speech-to-text app powered by [whisper.cpp](https://github
 - [Paths](#paths)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+## Demo
+
+![Sussurro demo](assets/sussurro-demo.gif)
 
 ## How to run
 
