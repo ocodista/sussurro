@@ -4,7 +4,7 @@
 
 <h1 align="center">Sussurro</h1>
 
-A small local macOS speech-to-text app powered by `whisper.cpp`.
+A small offline macOS speech-to-text app powered by [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
 
 **Contents**
 
@@ -53,8 +53,8 @@ Open **Sussurro → Settings…** or click the gear button.
 
 Sussurro checks for:
 
-- `whisper-cli` from Homebrew `whisper-cpp`
-- a GGML Whisper model in `~/Library/Application Support/Sussurro/Models/`
+- `whisper-cli` from Homebrew [`whisper-cpp`](https://github.com/ggml-org/whisper.cpp)
+- a [GGML Whisper model](https://huggingface.co/ggerganov/whisper.cpp) in `~/Library/Application Support/Sussurro/Models/`
 
 Install both with:
 
@@ -89,7 +89,9 @@ You can also download a model from Settings.
 
 ## Models
 
-Default model: `ggml-large-v3-turbo-q5_0.bin`.
+Default model: [`ggml-large-v3-turbo-q5_0.bin`](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-large-v3-turbo-q5_0.bin).
+
+Model source: [`ggerganov/whisper.cpp` on Hugging Face](https://huggingface.co/ggerganov/whisper.cpp).
 
 Presets:
 
