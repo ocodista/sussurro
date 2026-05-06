@@ -19,9 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        if let appIcon = AppLogoImage.appIcon {
+            NSApplication.shared.applicationIconImage = appIcon
+        }
+
         let windowController = FloatingRecorderWindowController(settings: AppSettings.shared)
         self.windowController = windowController
-        windowController.showWindow(nil)
+        windowController.show()
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         if AppSetupStatus.requiresAttention(settings: AppSettings.shared) {
@@ -30,6 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            windowController?.show()
+        }
+
+        return true
     }
 }

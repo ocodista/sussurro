@@ -43,9 +43,8 @@ struct AudioInputPicker: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.42))
 
-            picker
-                .labelsHidden()
-                .frame(maxWidth: 230)
+            inputMenu
+                .frame(maxWidth: 250)
 
             Spacer(minLength: 0)
         }
@@ -64,7 +63,7 @@ struct AudioInputPicker: View {
                 .font(.caption.weight(.semibold))
 
             HStack(spacing: 8) {
-                picker
+                inputMenu
 
                 if includeRefreshButton {
                     Button("Refresh") {
@@ -86,19 +85,74 @@ struct AudioInputPicker: View {
         }
     }
 
-    private var picker: some View {
-        Picker("Audio input", selection: $settings.selectedInputDeviceUID) {
-            Text("Default system input").tag("")
+    private var inputMenu: some View {
+        Menu {
+            Button {
+                settings.selectedInputDeviceUID = ""
+            } label: {
+                menuItemLabel("Default system input", isSelected: selectedInputDeviceUID.isEmpty)
+            }
+
+            if !inputDevices.devices.isEmpty {
+                Divider()
+            }
 
             ForEach(inputDevices.devices) { device in
-                Text(device.name).tag(device.uid)
+                Button {
+                    settings.selectedInputDeviceUID = device.uid
+                } label: {
+                    menuItemLabel(device.name, isSelected: selectedInputDeviceUID == device.uid)
+                }
             }
 
             if inputDevices.isMissingSelectedDevice(uid: settings.selectedInputDeviceUID) {
-                Text("Missing input").tag(settings.selectedInputDeviceUID)
+                Divider()
+
+                Button {
+                    settings.selectedInputDeviceUID = ""
+                } label: {
+                    Label("Reset missing input", systemImage: "exclamationmark.triangle")
+                }
             }
+        } label: {
+            HStack(spacing: 6) {
+                Text(selectedInputName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(compact ? .white.opacity(0.40) : .secondary)
+            }
+            .font(compact ? .caption.weight(.medium) : .body)
+            .foregroundStyle(compact ? .white.opacity(0.72) : .primary)
+            .frame(maxWidth: compact ? 250 : .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .pickerStyle(.menu)
         .disabled(isDisabled)
+        .pointingHandCursor(!isDisabled)
+    }
+
+    @ViewBuilder
+    private func menuItemLabel(_ title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    private var selectedInputDeviceUID: String {
+        settings.selectedInputDeviceUID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var selectedInputName: String {
+        guard !selectedInputDeviceUID.isEmpty else { return "Default system input" }
+
+        if let device = inputDevices.devices.first(where: { $0.uid == selectedInputDeviceUID }) {
+            return device.name
+        }
+
+        return "Missing input"
     }
 }

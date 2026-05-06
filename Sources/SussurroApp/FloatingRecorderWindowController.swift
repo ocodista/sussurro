@@ -9,23 +9,33 @@ final class FloatingRecorderWindowController: NSWindowController {
         let contentView = RecorderView(recorder: recorder, transcriber: transcriber, settings: settings)
 
         let panel = FloatingRecorderPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 620),
-            styleMask: [.titled, .fullSizeContentView, .resizable, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 680),
+            styleMask: [.titled, .resizable, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
 
         panel.title = "Sussurro"
         panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
+        panel.titlebarAppearsTransparent = false
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.minSize = NSSize(width: 600, height: 560)
+        panel.contentMinSize = NSSize(width: 640, height: 620)
         panel.contentView = NSHostingView(rootView: contentView)
         panel.center()
 
         super.init(window: panel)
+    }
+
+    func show() {
+        if window?.isVisible == false {
+            window?.center()
+        }
+
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
     }
 
     @available(*, unavailable)

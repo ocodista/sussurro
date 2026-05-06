@@ -9,6 +9,7 @@ APP_DIR="$ROOT/dist/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
+APP_RESOURCES="$ROOT/Sources/SussurroApp/Resources"
 
 cd "$ROOT"
 swift build -c "$CONFIG"
@@ -17,6 +18,8 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$ROOT/.build/$CONFIG/$APP_NAME" "$MACOS/$APP_NAME"
 chmod +x "$MACOS/$APP_NAME"
+cp "$APP_RESOURCES/Sussurro.icns" "$RESOURCES/Sussurro.icns"
+cp "$APP_RESOURCES/sussurro-logo.png" "$RESOURCES/sussurro-logo.png"
 
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,6 +33,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>
+  <string>Sussurro</string>
+  <key>CFBundleIconFile</key>
   <string>Sussurro</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>

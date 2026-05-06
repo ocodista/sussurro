@@ -17,7 +17,7 @@ struct RecorderView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             header
             AudioInputPicker(settings: settings, isDisabled: recorder.isRecording, compact: true)
             WaveformView(levels: recorder.levels, isRecording: recorder.isRecording)
@@ -25,10 +25,10 @@ struct RecorderView: View {
             transcriptionCard
             footer
         }
-        .padding(.top, 52)
-        .padding(.horizontal, 40)
-        .padding(.bottom, 34)
-        .frame(minWidth: 600, minHeight: 560)
+        .padding(.top, 28)
+        .padding(.horizontal, 32)
+        .padding(.bottom, 28)
+        .frame(minWidth: 640, minHeight: 620)
         .background(Color(red: 0.065, green: 0.067, blue: 0.078))
         .preferredColorScheme(.dark)
         .onAppear(perform: registerGlobalHotKey)
@@ -39,10 +39,7 @@ struct RecorderView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-                .shadow(color: statusColor.opacity(0.55), radius: recorder.isRecording ? 6 : 0)
+            appLogo
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Sussurro")
@@ -66,6 +63,34 @@ struct RecorderView: View {
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
+        }
+    }
+
+    @ViewBuilder
+    private var appLogo: some View {
+        if let logo = AppLogoImage.logo {
+            Image(nsImage: logo)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFill()
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 8, height: 8)
+                        .overlay(Circle().stroke(Color(red: 0.065, green: 0.067, blue: 0.078), lineWidth: 1.5))
+                        .shadow(color: statusColor.opacity(0.55), radius: recorder.isRecording ? 6 : 0)
+                }
+        } else {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .shadow(color: statusColor.opacity(0.55), radius: recorder.isRecording ? 6 : 0)
         }
     }
 
@@ -113,7 +138,7 @@ struct RecorderView: View {
     }
 
     private var transcriptionCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 ZStack {
                     Circle()
@@ -184,9 +209,9 @@ struct RecorderView: View {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(Color.white.opacity(0.055), lineWidth: 1)
                 )
-                .frame(minHeight: 150)
+                .frame(minHeight: 130)
         }
-        .padding(24)
+        .padding(20)
         .background(cardBackground)
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)

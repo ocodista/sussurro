@@ -24,9 +24,9 @@ struct WaveformView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .animation(.linear(duration: 0.08), value: levels)
         }
-        .frame(height: 72)
+        .frame(height: 56)
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.white.opacity(0.04))
