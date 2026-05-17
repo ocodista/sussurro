@@ -27,11 +27,15 @@ struct AppSetupStatus {
             return "Missing path"
         }
 
+        let modelURL = URL(fileURLWithPath: modelPath)
         if isModelReady {
-            return AppPaths.abbreviatedPath(URL(fileURLWithPath: modelPath))
+            if AppPaths.isBundledModelURL(modelURL) {
+                return "Included with Sussurro · \(modelURL.lastPathComponent)"
+            }
+            return AppPaths.abbreviatedPath(modelURL)
         }
 
-        return "Not found at \(AppPaths.abbreviatedPath(URL(fileURLWithPath: modelPath)))"
+        return "Not found at \(AppPaths.abbreviatedPath(modelURL))"
     }
 
     @MainActor

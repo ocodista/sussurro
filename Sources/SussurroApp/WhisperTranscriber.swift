@@ -30,6 +30,7 @@ final class WhisperTranscriber: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var currentTranscriptionElapsed: TimeInterval = 0
     @Published private(set) var lastTranscriptionDuration: TimeInterval?
+    @Published private(set) var lastUsedModelPath: String?
 
     private let settings: AppSettings
     private let processController = TranscriptionProcessController()
@@ -40,7 +41,7 @@ final class WhisperTranscriber: ObservableObject {
     }
 
     var modelDescription: String {
-        let modelPath = settings.expandedModelPath
+        let modelPath = lastUsedModelPath ?? settings.expandedModelPath
         guard !modelPath.isEmpty else { return "GGML model" }
         return URL(fileURLWithPath: modelPath).lastPathComponent
     }
@@ -67,9 +68,9 @@ final class WhisperTranscriber: ObservableObject {
         return normalizedCode.split { $0 == "-" || $0 == "_" }.first.map(String.init) ?? normalizedCode
     }
 
-    func transcribe(audioURL: URL) async -> Bool {
+    func transcribe(audioURL: URL, modelPathOverride: String? = nil) async -> Bool {
         guard !isTranscribing else { return false }
-        guard let request = makeWhisperRequest() else { return false }
+        guard let request = makeWhisperRequest(modelPathOverride: modelPathOverride) else { return false }
 
         let startedAt = Date()
         processController.resetCancellation()
@@ -79,6 +80,7 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionStartedAt = startedAt
         currentTranscriptionElapsed = 0
         lastTranscriptionDuration = nil
+        lastUsedModelPath = request.modelPath
         detectedLanguageCode = nil
         errorMessage = nil
         startTranscriptionTimer(startedAt: startedAt)
@@ -148,11 +150,18 @@ final class WhisperTranscriber: ObservableObject {
         currentTranscriptionElapsed = 0
         detectedLanguageCode = nil
         transcriptionStartedAt = nil
+        lastUsedModelPath = nil
         status = .idle
     }
 
-    private func makeWhisperRequest() -> WhisperRequest? {
-        let modelPath = settings.expandedModelPath
+    private func makeWhisperRequest(modelPathOverride: String?) -> WhisperRequest? {
+        let modelPath: String
+        if let modelPathOverride {
+            let expandedOverride = AppPaths.expandedPath(modelPathOverride.trimmingCharacters(in: .whitespacesAndNewlines))
+            modelPath = expandedOverride.isEmpty ? settings.expandedModelPath : expandedOverride
+        } else {
+            modelPath = settings.expandedModelPath
+        }
         let whisperCLIPath = settings.expandedWhisperCLIPath
 
         guard !modelPath.isEmpty else {

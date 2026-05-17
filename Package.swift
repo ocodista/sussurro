@@ -15,6 +15,9 @@ let package = Package(
             path: "Sources/SussurroApp",
             resources: [
                 .process("Resources")
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
             ]
         ),
         .testTarget(

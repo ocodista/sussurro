@@ -23,11 +23,36 @@ struct AppPaths {
     }
 
     static var preferredModelURL: URL {
-        modelURL(for: .recommended)
+        availableModelURL(for: .recommended) ?? modelURL(for: .recommended)
     }
 
     static func modelURL(for preset: WhisperModelPreset) -> URL {
         modelsDirectory.appendingPathComponent(preset.fileName)
+    }
+
+    static func availableModelURL(for preset: WhisperModelPreset) -> URL? {
+        let downloadedURL = modelURL(for: preset)
+        if FileManager.default.fileExists(atPath: downloadedURL.path) {
+            return downloadedURL
+        }
+
+        return bundledModelURL(for: preset)
+    }
+
+    static func bundledModelURL(for preset: WhisperModelPreset) -> URL? {
+        bundledModelDirectories()
+            .map { $0.appendingPathComponent(preset.fileName) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    static func isBundledModelURL(_ url: URL) -> Bool {
+        bundledModelDirectories().contains { directory in
+            url.path.hasPrefix(directory.path + "/")
+        }
+    }
+
+    static var historyDatabaseURL: URL {
+        applicationSupportDirectory.appendingPathComponent("history.sqlite")
     }
 
     static var whisperLogURL: URL {
@@ -43,9 +68,8 @@ struct AppPaths {
     }
 
     static func defaultModelURL() -> URL? {
-        WhisperModelPreset.allCases
-            .map(modelURL(for:))
-            .first { FileManager.default.fileExists(atPath: $0.path) }
+        let presets = [WhisperModelPreset.recommended] + WhisperModelPreset.allCases.filter { $0 != .recommended }
+        return presets.compactMap(availableModelURL(for:)).first
     }
 
     static func expandedPath(_ path: String) -> String {
@@ -65,6 +89,25 @@ struct AppPaths {
         }
 
         return path
+    }
+
+    private static func bundledModelDirectories() -> [URL] {
+        var directories: [URL] = []
+
+        if let resourceURL = Bundle.main.resourceURL {
+            directories.append(resourceURL.appendingPathComponent("Models", isDirectory: true))
+        }
+
+        #if SWIFT_PACKAGE
+        if let moduleResourceURL = Bundle.module.resourceURL {
+            directories.append(moduleResourceURL.appendingPathComponent("Models", isDirectory: true))
+        }
+        #endif
+
+        directories.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Models", isDirectory: true))
+
+        return directories
     }
 
     private static func userDirectory(_ directory: FileManager.SearchPathDirectory) -> URL {

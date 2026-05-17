@@ -56,18 +56,13 @@ scripts/run.sh
 
 Open **Sussurro → Settings…** or click the gear button.
 
-Sussurro checks for:
-
-- `whisper-cli` from Homebrew [`whisper-cpp`](https://github.com/ggml-org/whisper.cpp)
-- a [GGML Whisper model](https://huggingface.co/ggerganov/whisper.cpp) in `~/Library/Application Support/Sussurro/Models/`
-
-Install both with:
+Sussurro ships with the recommended GGML Whisper model. It only needs `whisper-cli` from Homebrew [`whisper-cpp`](https://github.com/ggml-org/whisper.cpp):
 
 ```bash
-scripts/install-deps.sh turbo
+brew install whisper-cpp
 ```
 
-You can also download a model from Settings.
+Advanced users can override the CLI/model paths or download alternate models from Settings.
 
 ## How to use
 
@@ -80,8 +75,9 @@ You can also download a model from Settings.
 ## Features
 
 - floating recorder window with input picker and waveform
+- SQLite-backed audio and transcript history for reviewing and retrying failed or long transcriptions
 - local transcription through `whisper.cpp`
-- model download and path settings
+- bundled recommended Whisper model, with optional model download and path overrides
 - transcription status, duration, and language display
 - clipboard copy and diagnostic command logs
 
@@ -90,11 +86,12 @@ You can also download a model from Settings.
 - Transcription runs locally through `whisper.cpp`; Sussurro does not send audio or transcripts to an app server.
 - Recordings are stored locally in `~/Library/Application Support/Sussurro/Recordings/` until you delete them.
 - Successful transcripts are copied to the macOS clipboard, where other apps may be able to read them.
+- Transcript history is stored locally in SQLite at `~/Library/Application Support/Sussurro/history.sqlite` so you can review and retry previous audio.
 - Diagnostic logs intentionally omit transcript text. They keep command metadata and `whisper-cli` stderr for troubleshooting.
 
 ## Models
 
-Default model: [`ggml-large-v3-turbo-q5_0.bin`](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-large-v3-turbo-q5_0.bin).
+Bundled default model: [`ggml-large-v3-turbo-q5_0.bin`](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-large-v3-turbo-q5_0.bin).
 
 Model source: [`ggerganov/whisper.cpp` on Hugging Face](https://huggingface.co/ggerganov/whisper.cpp).
 
@@ -106,8 +103,10 @@ Presets:
 
 ## Paths
 
-- models: `~/Library/Application Support/Sussurro/Models/`
+- bundled models: `Sussurro.app/Contents/Resources/Models/`
+- downloaded models: `~/Library/Application Support/Sussurro/Models/`
 - recordings: `~/Library/Application Support/Sussurro/Recordings/`
+- history database: `~/Library/Application Support/Sussurro/history.sqlite`
 - logs: `~/Library/Logs/Sussurro/`
 - latest transcription log: `~/Library/Logs/Sussurro/whisper-last.log`
 

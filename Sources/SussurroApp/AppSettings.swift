@@ -32,9 +32,16 @@ final class AppSettings: ObservableObject {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        modelPath = userDefaults.string(forKey: Self.modelPathKey) ?? Self.defaultModelPath()
+
+        let storedModelPath = userDefaults.string(forKey: Self.modelPathKey)
+        let resolvedModelPath = Self.resolvedModelPath(storedModelPath)
+        modelPath = resolvedModelPath
         whisperCLIPath = userDefaults.string(forKey: Self.whisperCLIPathKey) ?? Self.defaultWhisperCLIPath()
         selectedInputDeviceUID = userDefaults.string(forKey: Self.selectedInputDeviceUIDKey) ?? ""
+
+        if storedModelPath != resolvedModelPath {
+            userDefaults.set(resolvedModelPath, forKey: Self.modelPathKey)
+        }
     }
 
     func resetPathsToDefaults() {
@@ -44,6 +51,16 @@ final class AppSettings: ObservableObject {
 
     private func save(_ value: String, forKey key: String) {
         userDefaults.set(value, forKey: key)
+    }
+
+    private static func resolvedModelPath(_ storedModelPath: String?) -> String {
+        guard let storedModelPath else { return defaultModelPath() }
+
+        let expandedStoredPath = AppPaths.expandedPath(storedModelPath.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !expandedStoredPath.isEmpty else { return defaultModelPath() }
+        guard !FileManager.default.fileExists(atPath: expandedStoredPath) else { return storedModelPath }
+
+        return defaultModelPath()
     }
 
     private static func defaultModelPath() -> String {

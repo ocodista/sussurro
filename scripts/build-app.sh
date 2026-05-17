@@ -10,6 +10,7 @@ CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 APP_RESOURCES="$ROOT/Sources/SussurroApp/Resources"
+APP_MODELS="$ROOT/Models"
 
 cd "$ROOT"
 swift build -c "$CONFIG"
@@ -20,6 +21,10 @@ cp "$ROOT/.build/$CONFIG/$APP_NAME" "$MACOS/$APP_NAME"
 chmod +x "$MACOS/$APP_NAME"
 cp "$APP_RESOURCES/Sussurro.icns" "$RESOURCES/Sussurro.icns"
 cp "$APP_RESOURCES/sussurro-logo.png" "$RESOURCES/sussurro-logo.png"
+if compgen -G "$APP_MODELS/*.bin" >/dev/null; then
+  mkdir -p "$RESOURCES/Models"
+  cp -fL "$APP_MODELS"/*.bin "$RESOURCES/Models/"
+fi
 
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

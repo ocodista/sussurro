@@ -11,8 +11,8 @@ final class SettingsWindowController: NSWindowController {
         self.settings = settings
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 620),
+            styleMask: [.titled, .resizable, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
@@ -20,6 +20,7 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.contentMinSize = NSSize(width: 700, height: 560)
         window.contentView = NSHostingView(rootView: SettingsView(settings: settings))
         window.center()
 
