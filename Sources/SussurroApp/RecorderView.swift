@@ -6,6 +6,7 @@ struct RecorderView: View {
     @StateObject private var transcriber: WhisperTranscriber
     @StateObject private var recordingHistory = RecordingHistoryStore()
     @ObservedObject private var settings: AppSettings
+    @State private var recordingMode: RecordingMode = .dictation
     @State private var lastRecordingURL: URL?
     @State private var retryModelSelectionID = RetryModelOption.currentID
     @State private var showHistoryPopover = false
@@ -23,7 +24,8 @@ struct RecorderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            AudioInputPicker(settings: settings, isDisabled: recorder.isRecording, compact: true)
+            AudioInputPicker(settings: settings, isDisabled: isRecorderConfigurationDisabled, compact: true)
+            recordingModePicker
             WaveformView(levels: recorder.levels, isRecording: recorder.isRecording)
             controls
             transcriptionCard
@@ -144,6 +146,43 @@ struct RecorderView: View {
         }
     }
 
+    private var recordingModePicker: some View {
+        HStack(spacing: 10) {
+            Image(systemName: recordingMode == .meeting ? "person.2.wave.2.fill" : "text.quote")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.50))
+
+            Text("Mode")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.42))
+
+            Picker("Recording mode", selection: $recordingMode) {
+                ForEach(RecordingMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .frame(width: 190)
+            .disabled(isRecorderConfigurationDisabled)
+
+            Text(recordingMode.detail)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.38))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(Color.white.opacity(recordingMode == .meeting ? 0.065 : 0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(recordingMode == .meeting ? 0.10 : 0.055), lineWidth: 1)
+        )
+    }
+
     private var controls: some View {
         HStack(spacing: 14) {
             Button {
@@ -155,7 +194,7 @@ struct RecorderView: View {
                 }
                 .font(.system(.body, design: .rounded).weight(.semibold))
                 .foregroundStyle(.white)
-                .frame(minWidth: 136, minHeight: 44)
+                .frame(minWidth: recordingMode == .meeting ? 164 : 136, minHeight: 44)
                 .background(recordButtonColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -313,12 +352,19 @@ struct RecorderView: View {
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.30))
             } else {
-                Text("Space or ⌘⌥M to start, stop, or cancel")
+                Text(idleFooterText)
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.30))
             }
         }
         .frame(minHeight: 16, alignment: .leading)
+    }
+
+    private var idleFooterText: String {
+        if recordingMode == .meeting {
+            return "Meeting mode records mic + system audio locally. Use headphones to reduce speaker bleed."
+        }
+        return "Space or ⌘⌥M to start, stop, or cancel"
     }
 
     private var statusColor: Color {
@@ -328,21 +374,21 @@ struct RecorderView: View {
     }
 
     private var statusText: String {
-        if recorder.isRecording { return "Recording" }
-        if transcriber.isTranscribing { return "Transcribing with whisper.cpp" }
-        return "Ready · whisper.cpp · ⌘⌥M"
+        if recorder.isRecording { return recordingMode == .meeting ? "Recording meeting" : "Recording" }
+        if transcriber.isTranscribing { return "Transcribing locally with whisper.cpp" }
+        return recordingMode == .meeting ? "Ready · meeting mode · local" : "Ready · whisper.cpp · ⌘⌥M"
     }
 
     private var recordButtonTitle: String {
         if recorder.isRecording { return "Stop" }
         if transcriber.isStoppingTranscription { return "Stopping" }
         if transcriber.isTranscribing { return "Stop" }
-        return "Record"
+        return recordingMode == .meeting ? "Start Meeting" : "Record"
     }
 
     private var recordButtonIcon: String {
         if recorder.isRecording || transcriber.isTranscribing { return "stop.fill" }
-        return "mic.fill"
+        return recordingMode == .meeting ? "person.2.wave.2.fill" : "mic.fill"
     }
 
     private var recordButtonColor: Color {
@@ -389,8 +435,12 @@ struct RecorderView: View {
         return options
     }
 
-    private var isRetryDisabled: Bool {
+    private var isRecorderConfigurationDisabled: Bool {
         recorder.isRecording || transcriber.isTranscribing || transcriber.isStoppingTranscription
+    }
+
+    private var isRetryDisabled: Bool {
+        isRecorderConfigurationDisabled
     }
 
     private func openSettingsWindow() {
@@ -429,22 +479,32 @@ struct RecorderView: View {
 
         if recorder.isRecording {
             do {
-                let audioURL = try recorder.stopRecording()
-                lastRecordingURL = audioURL
+                let recordedAudio = try await recorder.stopRecording()
+                lastRecordingURL = recordedAudio.primaryURL
                 historyError = nil
                 recordingHistory.reload()
-                if await transcriber.transcribe(audioURL: audioURL) {
-                    saveTranscriptionHistory(for: audioURL)
+                if await transcriber.transcribe(recording: recordedAudio) {
+                    saveTranscriptionHistory(for: recordedAudio.primaryURL)
                     copyTranscript()
                 } else {
-                    saveTranscriptionHistory(for: audioURL)
+                    saveTranscriptionHistory(for: recordedAudio.primaryURL)
                 }
             } catch {
                 recorder.errorMessage = error.localizedDescription
             }
         } else {
             historyError = nil
-            await recorder.startRecording()
+            if recordingMode == .meeting {
+                guard MeetingPermissionPrompter.ensureScreenCapturePermission() else {
+                    recorder.errorMessage = "Meeting mode needs Screen & System Audio Recording permission before it can capture system audio."
+                    return
+                }
+            }
+
+            await recorder.startRecording(mode: recordingMode)
+            if recordingMode == .meeting, !recorder.isRecording, let errorMessage = recorder.errorMessage {
+                MeetingPermissionPrompter.showSystemAudioRecoveryPrompt(details: errorMessage)
+            }
             copied = false
         }
     }

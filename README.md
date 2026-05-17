@@ -67,14 +67,18 @@ Advanced users can override the CLI/model paths or download alternate models fro
 ## How to use
 
 1. Choose an input, or keep **Default system input**.
-2. Press **Record**, space, or **⌘⌥M**.
-3. Speak.
-4. Press **Stop**, space, or **⌘⌥M**.
-5. Wait for transcription. Sussurro copies the result to the clipboard.
+2. Choose **Dictation** for microphone-only notes or **Meeting** for a two-person call.
+3. Press **Record** / **Start Meeting**, space, or **⌘⌥M**.
+4. Speak.
+5. Press **Stop**, space, or **⌘⌥M**.
+6. Wait for transcription. Sussurro copies the result to the clipboard.
+
+Meeting mode records the microphone as **Person A** and local system audio as **Person B**, then merges the two local whisper.cpp transcripts chronologically without summarizing or rewriting the words. Use headphones to reduce speaker bleed between streams.
 
 ## Features
 
-- floating recorder window with input picker and waveform
+- floating recorder window with input picker, recording mode picker, and waveform
+- meeting mode that captures microphone + system audio locally and labels a two-person call as Person A/Person B
 - SQLite-backed audio and transcript history for reviewing and retrying failed or long transcriptions
 - local transcription through `whisper.cpp`
 - bundled recommended Whisper model, with optional model download and path overrides
@@ -84,6 +88,7 @@ Advanced users can override the CLI/model paths or download alternate models fro
 ## Privacy and safety
 
 - Transcription runs locally through `whisper.cpp`; Sussurro does not send audio or transcripts to an app server.
+- Meeting mode captures microphone and system audio locally. System audio capture may require macOS Screen Recording / System Audio permission.
 - Recordings are stored locally in `~/Library/Application Support/Sussurro/Recordings/` until you delete them.
 - Successful transcripts are copied to the macOS clipboard, where other apps may be able to read them.
 - Transcript history is stored locally in SQLite at `~/Library/Application Support/Sussurro/history.sqlite` so you can review and retry previous audio.

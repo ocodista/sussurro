@@ -36,6 +36,11 @@ final class AudioRecorder: ObservableObject {
     private let engine = AVAudioEngine()
     private var audioFile: AVAudioFile?
     private var recordingURL: URL?
+    private var currentRecordingMode: RecordingMode = .dictation
+    private var microphoneStartedAt: Date?
+    private var systemAudioRecorder: SystemAudioRecorder?
+    private var systemAudioURL: URL?
+    private var systemAudioStartedAt: Date?
     private var startedAt: Date?
     private var timer: Timer?
 
@@ -62,15 +67,26 @@ final class AudioRecorder: ObservableObject {
         }
     }
 
-    func startRecording() async {
+    func startRecording(mode: RecordingMode = .dictation) async {
         guard !isRecording else { return }
         guard await requestMicrophoneAccess() else {
             errorMessage = RecorderError.microphoneDenied.localizedDescription
             return
         }
 
+        let urls = nextRecordingURLs(for: mode)
+        var startedSystemRecorder: SystemAudioRecorder?
+
         do {
-            let url = nextRecordingURL()
+            if mode == .meeting, let targetSystemAudioURL = urls.systemAudioURL {
+                let recorder = SystemAudioRecorder(outputURL: targetSystemAudioURL)
+                try await recorder.start()
+                systemAudioRecorder = recorder
+                systemAudioURL = targetSystemAudioURL
+                systemAudioStartedAt = Date()
+                startedSystemRecorder = recorder
+            }
+
             let inputNode = engine.inputNode
             try configureSelectedInputDevice(on: inputNode)
             let format = inputNode.outputFormat(forBus: 0)
@@ -78,12 +94,15 @@ final class AudioRecorder: ObservableObject {
                 throw RecorderError.noInputFormat
             }
 
-            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            let file = try AVAudioFile(forWriting: urls.microphoneURL, settings: format.settings)
             audioFile = file
-            recordingURL = url
-            startedAt = Date()
+            recordingURL = urls.microphoneURL
+            currentRecordingMode = mode
+            microphoneStartedAt = Date()
+            startedAt = microphoneStartedAt
             elapsedSeconds = 0
             levels = Array(repeating: 0.02, count: 72)
+            errorMessage = nil
 
             inputNode.removeTap(onBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, file] buffer, _ in
@@ -106,14 +125,24 @@ final class AudioRecorder: ObservableObject {
             startTimer()
         } catch {
             cleanupEngine()
+            if let startedSystemRecorder {
+                _ = try? await startedSystemRecorder.stop()
+            }
+            cleanupSystemAudioState()
             errorMessage = error.localizedDescription
         }
     }
 
-    func stopRecording() throws -> URL {
+    func stopRecording() async throws -> RecordedAudio {
         guard isRecording else {
-            if let recordingURL { return recordingURL }
-            throw RecorderError.missingRecordingFile
+            guard let recordingURL else { throw RecorderError.missingRecordingFile }
+            return RecordedAudio(
+                mode: currentRecordingMode,
+                microphoneURL: recordingURL,
+                systemAudioURL: systemAudioURL,
+                microphoneStartedAt: microphoneStartedAt ?? Date(),
+                systemAudioStartedAt: systemAudioStartedAt
+            )
         }
 
         engine.inputNode.removeTap(onBus: 0)
@@ -126,7 +155,32 @@ final class AudioRecorder: ObservableObject {
         guard let recordingURL else {
             throw RecorderError.missingRecordingFile
         }
-        return recordingURL
+
+        let completedMode = currentRecordingMode
+        let completedMicrophoneStartedAt = microphoneStartedAt ?? Date()
+        let completedSystemAudioStartedAt = systemAudioStartedAt
+        let activeSystemAudioRecorder = systemAudioRecorder
+        systemAudioRecorder = nil
+
+        var completedSystemAudioURL: URL?
+        if let activeSystemAudioRecorder {
+            do {
+                completedSystemAudioURL = try await activeSystemAudioRecorder.stop()
+            } catch {
+                errorMessage = "System audio capture ended with a warning: \(error.localizedDescription)"
+            }
+        }
+
+        let fallbackSystemAudioURL = validFileURL(systemAudioURL)
+        let recording = RecordedAudio(
+            mode: completedMode,
+            microphoneURL: recordingURL,
+            systemAudioURL: completedSystemAudioURL ?? fallbackSystemAudioURL,
+            microphoneStartedAt: completedMicrophoneStartedAt,
+            systemAudioStartedAt: completedSystemAudioStartedAt
+        )
+        cleanupSystemAudioState()
+        return recording
     }
 
     private func cleanupEngine() {
@@ -136,6 +190,15 @@ final class AudioRecorder: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRecording = false
+        recordingURL = nil
+        microphoneStartedAt = nil
+        currentRecordingMode = .dictation
+    }
+
+    private func cleanupSystemAudioState() {
+        systemAudioRecorder = nil
+        systemAudioURL = nil
+        systemAudioStartedAt = nil
     }
 
     private func configureSelectedInputDevice(on inputNode: AVAudioInputNode) throws {
@@ -171,11 +234,30 @@ final class AudioRecorder: ObservableObject {
         }
     }
 
-    private func nextRecordingURL() -> URL {
+    private func nextRecordingURLs(for mode: RecordingMode) -> (microphoneURL: URL, systemAudioURL: URL?) {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let name = "recording-\(formatter.string(from: Date())).wav"
-        return AppPaths.recordingsDirectory.appendingPathComponent(name)
+        let timestamp = formatter.string(from: Date())
+
+        switch mode {
+        case .dictation:
+            return (
+                microphoneURL: AppPaths.recordingsDirectory.appendingPathComponent("recording-\(timestamp).wav"),
+                systemAudioURL: nil
+            )
+        case .meeting:
+            let baseName = "meeting-\(timestamp)"
+            return (
+                microphoneURL: AppPaths.recordingsDirectory.appendingPathComponent("\(baseName)-person-a-mic.wav"),
+                systemAudioURL: AppPaths.recordingsDirectory.appendingPathComponent("\(baseName)-person-b-system.caf")
+            )
+        }
+    }
+
+    private func validFileURL(_ url: URL?) -> URL? {
+        guard let url else { return nil }
+        guard let byteCount = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, byteCount > 0 else { return nil }
+        return url
     }
 
     private func startTimer() {

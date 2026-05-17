@@ -53,6 +53,10 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Sussurro records microphone audio locally so whisper.cpp can transcribe it into text.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Sussurro uses ScreenCaptureKit to capture local system audio for meeting transcription.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Sussurro captures system audio locally so meeting participants can be transcribed separately.</string>
 </dict>
 </plist>
 PLIST

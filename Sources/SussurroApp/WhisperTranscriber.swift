@@ -1,6 +1,25 @@
 import Darwin
 import Foundation
 
+struct WhisperTranscriptionSegment: Sendable, Equatable {
+    let start: TimeInterval
+    let end: TimeInterval
+    let text: String
+}
+
+struct MeetingTranscriptSource: Sendable, Equatable {
+    let speakerName: String
+    let startOffset: TimeInterval
+    let segments: [WhisperTranscriptionSegment]
+}
+
+private struct MeetingTranscriptLine: Sendable, Equatable {
+    let speakerName: String
+    let start: TimeInterval
+    let end: TimeInterval
+    let text: String
+}
+
 enum TranscriptionStatus: Sendable {
     case idle
     case preparing
@@ -68,6 +87,14 @@ final class WhisperTranscriber: ObservableObject {
         return normalizedCode.split { $0 == "-" || $0 == "_" }.first.map(String.init) ?? normalizedCode
     }
 
+    func transcribe(recording: RecordedAudio, modelPathOverride: String? = nil) async -> Bool {
+        guard recording.isMeetingRecording else {
+            return await transcribe(audioURL: recording.microphoneURL, modelPathOverride: modelPathOverride)
+        }
+
+        return await transcribeMeeting(recording: recording, modelPathOverride: modelPathOverride)
+    }
+
     func transcribe(audioURL: URL, modelPathOverride: String? = nil) async -> Bool {
         guard !isTranscribing else { return false }
         guard let request = makeWhisperRequest(modelPathOverride: modelPathOverride) else { return false }
@@ -123,6 +150,121 @@ final class WhisperTranscriber: ObservableObject {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    private func transcribeMeeting(recording: RecordedAudio, modelPathOverride: String?) async -> Bool {
+        guard !isTranscribing else { return false }
+        guard let request = makeWhisperRequest(modelPathOverride: modelPathOverride) else { return false }
+
+        let startedAt = Date()
+        processController.resetCancellation()
+        isTranscribing = true
+        isStoppingTranscription = false
+        status = .preparing
+        transcriptionStartedAt = startedAt
+        currentTranscriptionElapsed = 0
+        lastTranscriptionDuration = nil
+        lastUsedModelPath = request.modelPath
+        detectedLanguageCode = nil
+        errorMessage = nil
+        startTranscriptionTimer(startedAt: startedAt)
+        defer {
+            lastTranscriptionDuration = Date().timeIntervalSince(startedAt)
+            currentTranscriptionElapsed = lastTranscriptionDuration ?? currentTranscriptionElapsed
+            stopTranscriptionTimer()
+            transcriptionStartedAt = nil
+            isStoppingTranscription = false
+            isTranscribing = false
+        }
+
+        let sourceStartedAt = [recording.microphoneStartedAt, recording.systemAudioStartedAt]
+            .compactMap { $0 }
+            .min() ?? recording.microphoneStartedAt
+        let sources = meetingAudioSources(for: recording, relativeTo: sourceStartedAt)
+        var completedSources: [MeetingTranscriptSource] = []
+
+        do {
+            for source in sources {
+                try processController.checkCancellation()
+                guard !isStoppingTranscription else {
+                    status = .stopped
+                    errorMessage = "Transcription stopped."
+                    return false
+                }
+
+                status = .preparing
+                let normalizedAudioURL = try await Task.detached(priority: .userInitiated) {
+                    try Self.normalizedWAVURL(for: source.audioURL, processController: self.processController)
+                }.value
+                defer { try? FileManager.default.removeItem(at: normalizedAudioURL) }
+
+                guard !isStoppingTranscription else {
+                    status = .stopped
+                    errorMessage = "Transcription stopped."
+                    return false
+                }
+
+                status = .running
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try Self.runWhisper(
+                        audioURL: normalizedAudioURL,
+                        request: request,
+                        processController: self.processController,
+                        diagnosticSource: source.diagnosticSource
+                    )
+                }.value
+
+                if detectedLanguageCode == nil {
+                    detectedLanguageCode = result.languageCode
+                }
+
+                let segments = Self.segments(for: result)
+                completedSources.append(MeetingTranscriptSource(
+                    speakerName: source.speakerName,
+                    startOffset: source.startOffset,
+                    segments: segments
+                ))
+
+                let partialTranscript = Self.meetingTranscript(from: completedSources)
+                if !partialTranscript.isEmpty {
+                    transcript = partialTranscript
+                }
+            }
+
+            transcript = Self.meetingTranscript(from: completedSources).trimmingCharacters(in: .whitespacesAndNewlines)
+            status = .completed
+            return !transcript.isEmpty
+        } catch TranscriptionCancellation.cancelled {
+            status = .stopped
+            errorMessage = "Transcription stopped."
+            return false
+        } catch {
+            status = .failed
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    private func meetingAudioSources(for recording: RecordedAudio, relativeTo referenceDate: Date) -> [MeetingAudioSource] {
+        var sources = [
+            MeetingAudioSource(
+                audioURL: recording.microphoneURL,
+                speakerName: "Person A",
+                diagnosticSource: "person_a_microphone",
+                startOffset: max(0, recording.microphoneStartedAt.timeIntervalSince(referenceDate))
+            )
+        ]
+
+        if let systemAudioURL = recording.systemAudioURL {
+            sources.append(MeetingAudioSource(
+                audioURL: systemAudioURL,
+                speakerName: "Person B",
+                diagnosticSource: "person_b_system_audio",
+                startOffset: max(0, (recording.systemAudioStartedAt ?? referenceDate).timeIntervalSince(referenceDate))
+            ))
+        }
+
+        return sources
     }
 
     func stopTranscription() {
@@ -202,7 +344,12 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionTimer = nil
     }
 
-    nonisolated private static func runWhisper(audioURL: URL, request: WhisperRequest, processController: TranscriptionProcessController) throws -> WhisperResult {
+    nonisolated private static func runWhisper(
+        audioURL: URL,
+        request: WhisperRequest,
+        processController: TranscriptionProcessController,
+        diagnosticSource: String = "audio"
+    ) throws -> WhisperResult {
         let executableURL = URL(fileURLWithPath: request.whisperCLIPath)
         let modelURL = URL(fileURLWithPath: request.modelPath)
         let outputBaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sussurro-whisper-\(UUID().uuidString)")
@@ -226,9 +373,16 @@ final class WhisperTranscriber: ObservableObject {
         process.environment = environment
 
         let processResult = try processController.run(process)
-        let languageCode = detectedLanguageCode(from: jsonOutputURL)
+        let jsonResult = decodedJSONResult(from: jsonOutputURL)
+        let languageCode = jsonResult?.result?.language
+        let segments = jsonResult.map { Self.transcriptionSegments(from: $0) } ?? []
         let commandLine = commandDisplayLine(executableURL: executableURL, arguments: process.arguments ?? [])
-        writeWhisperLog(commandLine: commandLine, processResult: processResult, languageCode: languageCode)
+        writeWhisperLog(
+            commandLine: commandLine,
+            processResult: processResult,
+            languageCode: languageCode,
+            diagnosticSource: diagnosticSource
+        )
 
         if processResult.wasCancelled {
             throw TranscriptionCancellation.cancelled
@@ -237,7 +391,7 @@ final class WhisperTranscriber: ObservableObject {
             throw TranscriptionError.processFailed(commandName: "whisper-cli", status: processResult.terminationStatus, stderr: processResult.stderrText)
         }
 
-        return WhisperResult(transcript: processResult.stdoutText, languageCode: languageCode)
+        return WhisperResult(transcript: processResult.stdoutText, languageCode: languageCode, segments: segments)
     }
 
     nonisolated private static func normalizedWAVURL(for inputURL: URL, processController: TranscriptionProcessController) throws -> URL {
@@ -268,21 +422,122 @@ final class WhisperTranscriber: ObservableObject {
         return outputURL
     }
 
-    nonisolated private static func detectedLanguageCode(from url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONDecoder().decode(WhisperJSONResult.self, from: data)
-        else { return nil }
-
-        return json.result.language
+    nonisolated private static func decodedJSONResult(from url: URL) -> WhisperJSONResult? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(WhisperJSONResult.self, from: data)
     }
 
-    nonisolated private static func writeWhisperLog(commandLine: String, processResult: ProcessRunResult, languageCode: String?) {
+    nonisolated private static func transcriptionSegments(from json: WhisperJSONResult) -> [WhisperTranscriptionSegment] {
+        (json.transcription ?? []).compactMap { segment in
+            let text = (segment.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+
+            let start = timestampInterval(segment.timestamps?.from)
+                ?? offsetInterval(segment.offsets?.from)
+                ?? 0
+            let end = timestampInterval(segment.timestamps?.to)
+                ?? offsetInterval(segment.offsets?.to)
+                ?? start
+
+            return WhisperTranscriptionSegment(start: start, end: max(start, end), text: text)
+        }
+    }
+
+    nonisolated private static func segments(for result: WhisperResult) -> [WhisperTranscriptionSegment] {
+        if !result.segments.isEmpty {
+            return result.segments
+        }
+
+        let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !transcript.isEmpty else { return [] }
+        return [WhisperTranscriptionSegment(start: 0, end: 0, text: transcript)]
+    }
+
+    nonisolated static func meetingTranscript(from sources: [MeetingTranscriptSource]) -> String {
+        let lines = sources.flatMap { source in
+            source.segments.compactMap { segment -> MeetingTranscriptLine? in
+                let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                let start = max(0, source.startOffset + segment.start)
+                let end = max(start, source.startOffset + segment.end)
+                return MeetingTranscriptLine(speakerName: source.speakerName, start: start, end: end, text: text)
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.start == rhs.start {
+                return lhs.speakerName < rhs.speakerName
+            }
+            return lhs.start < rhs.start
+        }
+
+        return lines
+            .map { "[\(formatMeetingTimestamp($0.start))] \($0.speakerName): \($0.text)" }
+            .joined(separator: "\n")
+    }
+
+    nonisolated private static func timestampInterval(_ value: String?) -> TimeInterval? {
+        guard let value else { return nil }
+        let normalizedValue = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard !normalizedValue.isEmpty else { return nil }
+
+        let components = normalizedValue.split(separator: ":").map(String.init)
+        guard components.count == 2 || components.count == 3 else { return nil }
+
+        let hours: Double
+        let minutes: Double
+        let seconds: Double
+        if components.count == 3 {
+            guard let parsedHours = Double(components[0]),
+                  let parsedMinutes = Double(components[1]),
+                  let parsedSeconds = Double(components[2])
+            else { return nil }
+            hours = parsedHours
+            minutes = parsedMinutes
+            seconds = parsedSeconds
+        } else {
+            guard let parsedMinutes = Double(components[0]),
+                  let parsedSeconds = Double(components[1])
+            else { return nil }
+            hours = 0
+            minutes = parsedMinutes
+            seconds = parsedSeconds
+        }
+
+        return hours * 3600 + minutes * 60 + seconds
+    }
+
+    nonisolated private static func offsetInterval(_ value: Int?) -> TimeInterval? {
+        guard let value else { return nil }
+        return TimeInterval(value) / 1000
+    }
+
+    nonisolated private static func formatMeetingTimestamp(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let remainingSeconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%02d:%02d", minutes, remainingSeconds)
+    }
+
+    nonisolated private static func writeWhisperLog(
+        commandLine: String,
+        processResult: ProcessRunResult,
+        languageCode: String?,
+        diagnosticSource: String
+    ) {
         let cancellationText = processResult.wasCancelled ? "yes" : "no"
         let languageText = languageCode ?? "unknown"
         let stdoutByteCount = processResult.stdoutText.lengthOfBytes(using: .utf8)
         let stderrText = redactedDiagnosticText(processResult.stderrText)
         let log = """
         backend: whisper.cpp
+        source: \(diagnosticSource)
         cancelled: \(cancellationText)
         language: \(languageText)
         command: \(commandLine)
@@ -343,13 +598,38 @@ private struct WhisperRequest: Sendable {
 private struct WhisperResult: Sendable {
     let transcript: String
     let languageCode: String?
+    let segments: [WhisperTranscriptionSegment]
+}
+
+private struct MeetingAudioSource {
+    let audioURL: URL
+    let speakerName: String
+    let diagnosticSource: String
+    let startOffset: TimeInterval
 }
 
 private struct WhisperJSONResult: Decodable {
-    let result: Result
+    let result: Result?
+    let transcription: [Segment]?
 
     struct Result: Decodable {
         let language: String?
+    }
+
+    struct Segment: Decodable {
+        let text: String?
+        let timestamps: Timestamps?
+        let offsets: Offsets?
+    }
+
+    struct Timestamps: Decodable {
+        let from: String?
+        let to: String?
+    }
+
+    struct Offsets: Decodable {
+        let from: Int?
+        let to: Int?
     }
 }
 
