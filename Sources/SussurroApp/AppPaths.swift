@@ -60,11 +60,23 @@ struct AppPaths {
     }
 
     static func defaultWhisperCLIURL() -> URL? {
-        let candidates = [
-            "/opt/homebrew/bin/whisper-cli",
-            "/usr/local/bin/whisper-cli"
-        ]
-        return candidates.map(URL.init(fileURLWithPath:)).first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        whisperCLICandidateURLs().first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func bundledWhisperCLIURL() -> URL? {
+        bundledWhisperCLIURLCandidates().first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func isBundledWhisperCLIURL(_ url: URL) -> Bool {
+        let path = normalizedPath(url)
+        return bundledWhisperCLIURLCandidates().contains { normalizedPath($0) == path }
+    }
+
+    static func whisperResourcesURL(forExecutableURL executableURL: URL) -> URL? {
+        guard isBundledWhisperCLIURL(executableURL) else { return nil }
+
+        return bundledWhisperResourceDirectoryCandidates(forExecutableURL: executableURL)
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     static func defaultModelURL() -> URL? {
@@ -107,7 +119,70 @@ struct AppPaths {
         directories.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Models", isDirectory: true))
 
-        return directories
+        return uniqueURLs(directories)
+    }
+
+    private static func whisperCLICandidateURLs() -> [URL] {
+        bundledWhisperCLIURLCandidates()
+    }
+
+    private static func bundledWhisperCLIURLCandidates() -> [URL] {
+        var candidates: [URL] = []
+
+        if let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent() {
+            candidates.append(executableDirectory.appendingPathComponent("whisper-cli"))
+        }
+
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(resourceURL.appendingPathComponent("whisper-cli"))
+        }
+
+        #if SWIFT_PACKAGE
+        if let moduleResourceURL = Bundle.module.resourceURL {
+            candidates.append(moduleResourceURL.appendingPathComponent("whisper-cli"))
+        }
+        #endif
+
+        candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/sussurro-whisper/artifacts/whisper-cli"))
+
+        return uniqueURLs(candidates)
+    }
+
+    private static func bundledWhisperResourceDirectoryCandidates(forExecutableURL executableURL: URL) -> [URL] {
+        var candidates: [URL] = []
+
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(resourceURL.appendingPathComponent("Whisper", isDirectory: true))
+        }
+
+        candidates.append(executableURL.deletingLastPathComponent().appendingPathComponent("resources", isDirectory: true))
+
+        #if SWIFT_PACKAGE
+        if let moduleResourceURL = Bundle.module.resourceURL {
+            candidates.append(moduleResourceURL.appendingPathComponent("Whisper", isDirectory: true))
+        }
+        #endif
+
+        return uniqueURLs(candidates)
+    }
+
+    private static func uniqueURLs(_ urls: [URL]) -> [URL] {
+        var seenPaths = Set<String>()
+        var uniqueURLs: [URL] = []
+
+        for url in urls {
+            let path = normalizedPath(url)
+            guard !seenPaths.contains(path) else { continue }
+            seenPaths.insert(path)
+            uniqueURLs.append(url)
+        }
+
+        return uniqueURLs
+    }
+
+    private static func normalizedPath(_ url: URL) -> String {
+        url.standardizedFileURL.path
     }
 
     private static func userDirectory(_ directory: FileManager.SearchPathDirectory) -> URL {

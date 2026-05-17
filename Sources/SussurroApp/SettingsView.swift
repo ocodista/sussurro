@@ -6,7 +6,6 @@ struct SettingsView: View {
 
     @StateObject private var modelDownloader = ModelDownloadManager()
     @State private var selectedModelPreset = WhisperModelPreset.recommended
-    @State private var copiedInstallCommand = false
     @State private var showAdvancedPaths = false
 
     private var setupStatus: AppSetupStatus {
@@ -117,8 +116,9 @@ struct SettingsView: View {
                     .buttonStyle(SettingsSecondaryButtonStyle())
                     .pointingHandCursor()
 
-                Button(copiedInstallCommand ? "Copied" : "Copy Install") {
-                    copyWhisperInstallCommand()
+                Button("Reset Paths") {
+                    settings.resetPathsToDefaults()
+                    syncSelectedModelPreset()
                 }
                 .buttonStyle(SettingsPrimaryButtonStyle())
                 .pointingHandCursor()
@@ -133,14 +133,14 @@ struct SettingsView: View {
     }
 
     private var setupNoticeTitle: String {
-        if !setupStatus.isWhisperCLIReady { return "whisper-cli is required" }
+        if !setupStatus.isWhisperCLIReady { return "Bundled whisper.cpp unavailable" }
         if !setupStatus.isModelReady { return "Model unavailable" }
         return "Setup needs attention"
     }
 
     private var setupNoticeDetail: String {
         if !setupStatus.isWhisperCLIReady {
-            return "Sussurro includes the speech model, but needs the whisper.cpp command-line tool to run local transcription."
+            return "Sussurro includes whisper.cpp. Reset paths, reinstall Sussurro, or choose a custom whisper-cli executable."
         }
 
         if !setupStatus.isModelReady {
@@ -164,7 +164,7 @@ struct SettingsView: View {
         SettingsSectionCard(
             iconName: "captions.bubble",
             title: "Transcription",
-            subtitle: "Runs locally with whisper.cpp and an included Whisper model."
+            subtitle: "Runs locally with bundled whisper.cpp and an included Whisper model."
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -245,7 +245,7 @@ struct SettingsView: View {
         SettingsSectionCard(
             iconName: "slider.horizontal.3",
             title: "Advanced paths",
-            subtitle: "Most users do not need this. Override paths only if you installed things somewhere custom."
+            subtitle: "Most users do not need this. Override paths only if you want to use custom whisper.cpp or model files."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 SettingsCheckRow(
@@ -278,7 +278,7 @@ struct SettingsView: View {
                         SettingsPathField(
                             title: "whisper-cli",
                             subtitle: "Executable used to run local transcription.",
-                            placeholder: "/opt/homebrew/bin/whisper-cli",
+                            placeholder: whisperCLIPlaceholder,
                             text: $settings.whisperCLIPath,
                             isReady: setupStatus.isWhisperCLIReady,
                             statusText: setupStatus.whisperCLIDetail,
@@ -393,7 +393,8 @@ struct SettingsView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.directoryURL = URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true)
+        panel.directoryURL = AppPaths.defaultWhisperCLIURL()?.deletingLastPathComponent()
+            ?? URL(fileURLWithPath: "/usr/local/bin", isDirectory: true)
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         settings.whisperCLIPath = url.path
@@ -413,15 +414,10 @@ struct SettingsView: View {
         syncSelectedModelPreset()
     }
 
-    private func copyWhisperInstallCommand() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("brew install whisper-cpp", forType: .string)
-        copiedInstallCommand = true
-
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            copiedInstallCommand = false
-        }
+    private var whisperCLIPlaceholder: String {
+        AppPaths.bundledWhisperCLIURL()
+            .map(AppPaths.abbreviatedPath)
+            ?? "Sussurro.app/Contents/MacOS/whisper-cli"
     }
 
     private func syncSelectedModelPreset() {

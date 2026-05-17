@@ -15,11 +15,15 @@ struct AppSetupStatus {
             return "Missing path"
         }
 
+        let whisperCLIURL = URL(fileURLWithPath: whisperCLIPath)
         if isWhisperCLIReady {
-            return AppPaths.abbreviatedPath(URL(fileURLWithPath: whisperCLIPath))
+            if AppPaths.isBundledWhisperCLIURL(whisperCLIURL) {
+                return "Included with Sussurro · whisper-cli"
+            }
+            return AppPaths.abbreviatedPath(whisperCLIURL)
         }
 
-        return "Not executable at \(AppPaths.abbreviatedPath(URL(fileURLWithPath: whisperCLIPath)))"
+        return "Not executable at \(AppPaths.abbreviatedPath(whisperCLIURL))"
     }
 
     var modelDetail: String {

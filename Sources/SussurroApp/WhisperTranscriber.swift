@@ -317,12 +317,12 @@ final class WhisperTranscriber: ObservableObject {
             return nil
         }
         guard !whisperCLIPath.isEmpty else {
-            errorMessage = "whisper-cli was not found. Install it with: brew install whisper-cpp"
+            errorMessage = "Bundled whisper.cpp was not found. Reinstall Sussurro or choose a custom whisper-cli path in Settings."
             status = .failed
             return nil
         }
         guard FileManager.default.isExecutableFile(atPath: whisperCLIPath) else {
-            errorMessage = "whisper-cli not found or not executable at \(whisperCLIPath)."
+            errorMessage = "whisper-cli not found or not executable at \(whisperCLIPath). Reset paths, reinstall Sussurro, or choose a custom executable in Settings."
             status = .failed
             return nil
         }
@@ -369,7 +369,9 @@ final class WhisperTranscriber: ObservableObject {
         ]
 
         var environment = ProcessInfo.processInfo.environment
-        environment["GGML_METAL_PATH_RESOURCES"] = "/opt/homebrew/lib"
+        if let whisperResourcesURL = AppPaths.whisperResourcesURL(forExecutableURL: executableURL) {
+            environment["GGML_METAL_PATH_RESOURCES"] = whisperResourcesURL.path
+        }
         process.environment = environment
 
         let processResult = try processController.run(process)

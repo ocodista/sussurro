@@ -13,7 +13,7 @@ USER_APP := $(HOME)/Applications/$(APP_BUNDLE)
 help:
 	@printf 'Usage: make <target>\n\n'
 	@printf 'Targets:\n'
-	@printf '  build    Build %s into dist/\n' '$(APP_BUNDLE)'
+	@printf '  build    Build %s into dist/ with bundled whisper.cpp\n' '$(APP_BUNDLE)'
 	@printf '  install  Build and install %s into /Applications or ~/Applications\n' '$(APP_BUNDLE)'
 	@printf '  remove   Quit and remove installed/built %s bundles; keep app data\n' '$(APP_BUNDLE)'
 	@printf '  clean    Remove local build artifacts\n'

@@ -67,7 +67,6 @@ enum WhisperModelPreset: String, CaseIterable, Identifiable {
 enum WhisperSetupCommands {
     static func fullInstallCommand(for preset: WhisperModelPreset) -> String {
         """
-        brew install whisper-cpp
         mkdir -p "$HOME/Library/Application Support/Sussurro/Models"
         curl -L --fail --progress-bar "\(preset.downloadURL.absoluteString)" -o "$HOME/Library/Application Support/Sussurro/Models/\(preset.fileName)"
         """

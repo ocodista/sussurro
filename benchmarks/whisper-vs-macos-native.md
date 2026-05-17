@@ -7,7 +7,7 @@
 | macOS | 26.2 |
 | CPU | arm64 |
 | Audio | 13 recordings, 444.6s total |
-| whisper.cpp | `/opt/homebrew/bin/whisper-cli` |
+| whisper.cpp | bundled `whisper-cli` |
 | Whisper model | `ggml-large-v3-turbo-q5_0.bin` |
 | Native API | `SpeechAnalyzer` + `SpeechTranscriber` |
 

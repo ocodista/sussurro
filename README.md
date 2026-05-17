@@ -36,7 +36,7 @@ cd sussurro
 scripts/install-app.sh
 ```
 
-`install-app.sh` builds the app and installs it to `/Applications/Sussurro.app` when possible. Otherwise, it installs to `~/Applications/Sussurro.app`.
+`install-app.sh` builds bundled whisper.cpp, builds the app, and installs it to `/Applications/Sussurro.app` when possible. Otherwise, it installs to `~/Applications/Sussurro.app`. Building from source requires Xcode command line tools, Git, and CMake; running the built app does not require Homebrew.
 
 ### Open
 
@@ -52,17 +52,15 @@ Allow microphone access on first launch.
 scripts/run.sh
 ```
 
+`run.sh` also builds the local bundled whisper.cpp CLI when needed.
+
 ## First-time setup
 
 Open **Sussurro → Settings…** or click the gear button.
 
-Sussurro ships with the recommended GGML Whisper model. It only needs `whisper-cli` from Homebrew [`whisper-cpp`](https://github.com/ggml-org/whisper.cpp):
+Sussurro ships with bundled [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) and the recommended GGML Whisper model, so Homebrew is not required for transcription.
 
-```bash
-brew install whisper-cpp
-```
-
-Advanced users can override the CLI/model paths or download alternate models from Settings.
+Advanced users can override the bundled CLI/model paths or download alternate models from Settings.
 
 ## How to use
 
@@ -80,14 +78,14 @@ Meeting mode records the microphone as **Person A** and local system audio as **
 - floating recorder window with input picker, recording mode picker, and waveform
 - meeting mode that captures microphone + system audio locally and labels a two-person call as Person A/Person B
 - SQLite-backed audio and transcript history for reviewing and retrying failed or long transcriptions
-- local transcription through `whisper.cpp`
+- local transcription through bundled `whisper.cpp`
 - bundled recommended Whisper model, with optional model download and path overrides
 - transcription status, duration, and language display
 - clipboard copy and diagnostic command logs
 
 ## Privacy and safety
 
-- Transcription runs locally through `whisper.cpp`; Sussurro does not send audio or transcripts to an app server.
+- Transcription runs locally through bundled `whisper.cpp`; Sussurro does not send audio or transcripts to an app server.
 - Meeting mode captures microphone and system audio locally. System audio capture may require macOS Screen Recording / System Audio permission.
 - Recordings are stored locally in `~/Library/Application Support/Sussurro/Recordings/` until you delete them.
 - Successful transcripts are copied to the macOS clipboard, where other apps may be able to read them.
@@ -108,6 +106,7 @@ Presets:
 
 ## Paths
 
+- bundled whisper.cpp CLI: `Sussurro.app/Contents/MacOS/whisper-cli`
 - bundled models: `Sussurro.app/Contents/Resources/Models/`
 - downloaded models: `~/Library/Application Support/Sussurro/Models/`
 - recordings: `~/Library/Application Support/Sussurro/Recordings/`
@@ -123,11 +122,11 @@ Open the latest command log:
 cat "$HOME/Library/Logs/Sussurro/whisper-last.log"
 ```
 
-Common fixes:
+Common fixes when building from source:
 
 ```bash
-brew install whisper-cpp
-scripts/download-model.sh turbo
+scripts/install-deps.sh turbo
+scripts/build-app.sh
 ```
 
 ## License

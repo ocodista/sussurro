@@ -11,8 +11,15 @@ MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 APP_RESOURCES="$ROOT/Sources/SussurroApp/Resources"
 APP_MODELS="$ROOT/Models"
+WHISPER_ARTIFACTS="$ROOT/.build/sussurro-whisper/artifacts"
 
 cd "$ROOT"
+if [[ "${SUSSURRO_SKIP_WHISPER_BUILD:-0}" != "1" ]]; then
+  "$ROOT/scripts/build-whisper-cpp.sh"
+elif [[ ! -x "$WHISPER_ARTIFACTS/whisper-cli" ]]; then
+  echo "Warning: SUSSURRO_SKIP_WHISPER_BUILD=1 and no existing whisper-cli artifact was found; app will rely on a custom path." >&2
+fi
+
 swift build -c "$CONFIG"
 
 rm -rf "$APP_DIR"
@@ -21,6 +28,17 @@ cp "$ROOT/.build/$CONFIG/$APP_NAME" "$MACOS/$APP_NAME"
 chmod +x "$MACOS/$APP_NAME"
 cp "$APP_RESOURCES/Sussurro.icns" "$RESOURCES/Sussurro.icns"
 cp "$APP_RESOURCES/sussurro-logo.png" "$RESOURCES/sussurro-logo.png"
+if [[ -x "$WHISPER_ARTIFACTS/whisper-cli" ]]; then
+  cp -fL "$WHISPER_ARTIFACTS/whisper-cli" "$MACOS/whisper-cli"
+  chmod +x "$MACOS/whisper-cli"
+  if [[ -d "$WHISPER_ARTIFACTS/resources" ]] && compgen -G "$WHISPER_ARTIFACTS/resources/*" >/dev/null; then
+    mkdir -p "$RESOURCES/Whisper"
+    cp -Rf "$WHISPER_ARTIFACTS/resources/"* "$RESOURCES/Whisper/"
+  fi
+elif [[ "${SUSSURRO_SKIP_WHISPER_BUILD:-0}" != "1" ]]; then
+  echo "Missing bundled whisper-cli artifact at $WHISPER_ARTIFACTS/whisper-cli" >&2
+  exit 1
+fi
 if compgen -G "$APP_MODELS/*.bin" >/dev/null; then
   mkdir -p "$RESOURCES/Models"
   cp -fL "$APP_MODELS"/*.bin "$RESOURCES/Models/"

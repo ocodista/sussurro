@@ -16,10 +16,11 @@ final class WhisperModelPresetTests: XCTestCase {
         }
     }
 
-    func testSetupCommandDoesNotReferenceDeveloperLocalPaths() {
+    func testSetupCommandOnlyDownloadsTheModel() {
         let command = WhisperSetupCommands.fullInstallCommand(for: .turbo)
 
         XCTAssertTrue(command.contains("~/Library/Application Support/Sussurro/Models") || command.contains("$HOME/Library/Application Support/Sussurro/Models"))
+        XCTAssertFalse(command.contains("brew install"))
         XCTAssertFalse(command.contains("personal/"))
         XCTAssertFalse(command.contains("CustomSTT"))
         XCTAssertFalse(command.contains("superwhisper"))

@@ -27,6 +27,7 @@ final class AppSettings: ObservableObject {
     private static let modelPathKey = "modelPath"
     private static let whisperCLIPathKey = "whisperCLIPath"
     private static let selectedInputDeviceUIDKey = "selectedInputDeviceUID"
+    private static let didMigrateLegacyWhisperCLIPathKey = "didMigrateLegacyWhisperCLIPath"
 
     private let userDefaults: UserDefaults
 
@@ -35,12 +36,23 @@ final class AppSettings: ObservableObject {
 
         let storedModelPath = userDefaults.string(forKey: Self.modelPathKey)
         let resolvedModelPath = Self.resolvedModelPath(storedModelPath)
+        let storedWhisperCLIPath = userDefaults.string(forKey: Self.whisperCLIPathKey)
+        let resolvedWhisperCLIPath = Self.resolvedWhisperCLIPath(
+            storedWhisperCLIPath,
+            hasMigratedLegacyDefault: userDefaults.bool(forKey: Self.didMigrateLegacyWhisperCLIPathKey)
+        )
         modelPath = resolvedModelPath
-        whisperCLIPath = userDefaults.string(forKey: Self.whisperCLIPathKey) ?? Self.defaultWhisperCLIPath()
+        whisperCLIPath = resolvedWhisperCLIPath.path
         selectedInputDeviceUID = userDefaults.string(forKey: Self.selectedInputDeviceUIDKey) ?? ""
 
         if storedModelPath != resolvedModelPath {
             userDefaults.set(resolvedModelPath, forKey: Self.modelPathKey)
+        }
+        if storedWhisperCLIPath != resolvedWhisperCLIPath.path {
+            userDefaults.set(resolvedWhisperCLIPath.path, forKey: Self.whisperCLIPathKey)
+        }
+        if resolvedWhisperCLIPath.didMigrateLegacyDefault {
+            userDefaults.set(true, forKey: Self.didMigrateLegacyWhisperCLIPathKey)
         }
     }
 
@@ -67,7 +79,38 @@ final class AppSettings: ObservableObject {
         AppPaths.defaultModelURL()?.path ?? AppPaths.preferredModelURL.path
     }
 
+    private static func resolvedWhisperCLIPath(
+        _ storedWhisperCLIPath: String?,
+        hasMigratedLegacyDefault: Bool
+    ) -> (path: String, didMigrateLegacyDefault: Bool) {
+        let defaultPath = defaultWhisperCLIPath()
+        guard let storedWhisperCLIPath else { return (defaultPath, false) }
+
+        let expandedStoredPath = AppPaths.expandedPath(storedWhisperCLIPath.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !expandedStoredPath.isEmpty else { return (defaultPath, false) }
+
+        let storedURL = URL(fileURLWithPath: expandedStoredPath)
+        if AppPaths.isBundledWhisperCLIURL(storedURL) || isAppBundleWhisperCLIPath(expandedStoredPath) {
+            return (defaultPath, false)
+        }
+
+        if !hasMigratedLegacyDefault && !defaultPath.isEmpty && isHomebrewDefaultWhisperCLIPath(expandedStoredPath) {
+            return (defaultPath, true)
+        }
+
+        guard FileManager.default.isExecutableFile(atPath: expandedStoredPath) else { return (defaultPath, false) }
+        return (storedWhisperCLIPath, false)
+    }
+
+    private static func isHomebrewDefaultWhisperCLIPath(_ path: String) -> Bool {
+        path == "/opt/homebrew/bin/whisper-cli" || path == "/usr/local/bin/whisper-cli"
+    }
+
+    private static func isAppBundleWhisperCLIPath(_ path: String) -> Bool {
+        path.contains(".app/Contents/MacOS/whisper-cli")
+    }
+
     private static func defaultWhisperCLIPath() -> String {
-        AppPaths.defaultWhisperCLIURL()?.path ?? "/opt/homebrew/bin/whisper-cli"
+        AppPaths.defaultWhisperCLIURL()?.path ?? ""
     }
 }
