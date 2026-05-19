@@ -34,6 +34,13 @@ struct RecordedAudio: Sendable, Equatable {
 
     var primaryURL: URL { microphoneURL }
 
+    var audioURLs: [URL] {
+        if let systemAudioURL {
+            return [microphoneURL, systemAudioURL]
+        }
+        return [microphoneURL]
+    }
+
     var isMeetingRecording: Bool {
         mode == .meeting
     }

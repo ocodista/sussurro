@@ -1,48 +1,272 @@
 import AppKit
 import SwiftUI
 
+enum RecorderWindowPresentation: Equatable {
+    case expanded
+    case recordingCompact
+    case transcriptionCompact
+    case resultCompact
+    case fullTranscript
+
+    var contentSize: CGSize {
+        switch self {
+        case .expanded:
+            return CGSize(width: 640, height: 520)
+        case .recordingCompact:
+            return CGSize(width: 430, height: 104)
+        case .transcriptionCompact:
+            return CGSize(width: 460, height: 142)
+        case .resultCompact:
+            return CGSize(width: 480, height: 164)
+        case .fullTranscript:
+            return CGSize(width: 640, height: 620)
+        }
+    }
+}
+
 struct RecorderView: View {
     @StateObject private var recorder: AudioRecorder
     @StateObject private var transcriber: WhisperTranscriber
     @StateObject private var recordingHistory = RecordingHistoryStore()
     @ObservedObject private var settings: AppSettings
+    private let applyWindowPresentation: (RecorderWindowPresentation) -> Void
+    private let minimizeWindow: () -> Void
     @State private var recordingMode: RecordingMode = .dictation
     @State private var lastRecordingURL: URL?
+    @State private var lastRecordingByteCount: Int64?
+    @State private var lastRecordingDuration: TimeInterval?
+    @State private var isFullTranscriptionVisible = false
     @State private var retryModelSelectionID = RetryModelOption.currentID
     @State private var showHistoryPopover = false
     @State private var copied = false
+    @State private var copyToast: CopyToast?
+    @State private var copyToastTask: Task<Void, Never>?
     @State private var historyError: String?
     @State private var hotKey: GlobalHotKey?
     @State private var hotKeyError: String?
 
-    init(recorder: AudioRecorder, transcriber: WhisperTranscriber, settings: AppSettings) {
+    init(
+        recorder: AudioRecorder,
+        transcriber: WhisperTranscriber,
+        settings: AppSettings,
+        applyWindowPresentation: @escaping (RecorderWindowPresentation) -> Void = { _ in },
+        minimizeWindow: @escaping () -> Void = {}
+    ) {
         _recorder = StateObject(wrappedValue: recorder)
         _transcriber = StateObject(wrappedValue: transcriber)
         _settings = ObservedObject(wrappedValue: settings)
+        self.applyWindowPresentation = applyWindowPresentation
+        self.minimizeWindow = minimizeWindow
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header
-            AudioInputPicker(settings: settings, isDisabled: isRecorderConfigurationDisabled, compact: true)
-            recordingModePicker
-            WaveformView(levels: recorder.levels, isRecording: recorder.isRecording)
-            controls
-            transcriptionCard
-            footer
+        let presentation = windowPresentation
+
+        Group {
+            switch presentation {
+            case .expanded, .fullTranscript:
+                expandedBody
+            case .recordingCompact:
+                recordingCompactBody
+            case .transcriptionCompact:
+                transcriptionCompactBody
+            case .resultCompact:
+                resultCompactBody
+            }
         }
-        .padding(.top, 28)
-        .padding(.horizontal, 32)
-        .padding(.bottom, 28)
-        .frame(minWidth: 640, minHeight: 620)
+        .padding(contentPadding(for: presentation))
+        .frame(minWidth: presentation.contentSize.width, minHeight: presentation.contentSize.height)
         .background(Color(red: 0.065, green: 0.067, blue: 0.078))
+        .overlay(alignment: .top) {
+            copyToastOverlay
+        }
+        .animation(.easeInOut(duration: 0.18), value: copyToast)
+        .animation(.easeInOut(duration: 0.18), value: presentation)
         .preferredColorScheme(.dark)
         .onAppear {
             registerGlobalHotKey()
             recordingHistory.reload()
+            applyWindowPresentation(presentation)
+        }
+        .onChange(of: presentation) { newPresentation in
+            applyWindowPresentation(newPresentation)
+        }
+        .onDisappear {
+            copyToastTask?.cancel()
         }
         .task {
             _ = await recorder.requestMicrophoneAccess()
+        }
+    }
+
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            AudioInputPicker(settings: settings, isDisabled: isRecorderConfigurationDisabled, compact: true)
+            recordingModePicker
+            recordingMeters
+            controls
+            transcriptionCard
+            footer
+        }
+    }
+
+    private var recordingCompactBody: some View {
+        HStack(spacing: 12) {
+            compactRecordingMeters
+
+            Button {
+                Task { await toggleRecording() }
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(Color.red.opacity(0.92), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.space, modifiers: [])
+            .accessibilityLabel("Stop recording")
+            .pointingHandCursor()
+        }
+    }
+
+    @ViewBuilder
+    private var compactRecordingMeters: some View {
+        if recordingMode == .meeting {
+            VStack(spacing: 6) {
+                WaveformView(
+                    levels: recorder.levels,
+                    isRecording: recorder.isRecording,
+                    height: 20,
+                    horizontalPadding: 8,
+                    verticalPadding: 5
+                )
+                WaveformView(
+                    levels: recorder.systemAudioLevels,
+                    isRecording: recorder.isRecording,
+                    height: 20,
+                    horizontalPadding: 8,
+                    verticalPadding: 5
+                )
+            }
+            .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Microphone and system audio levels")
+        } else {
+            WaveformView(
+                levels: recorder.levels,
+                isRecording: recorder.isRecording,
+                height: 48,
+                horizontalPadding: 10,
+                verticalPadding: 8
+            )
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Microphone level")
+        }
+    }
+
+    private var transcriptionCompactBody: some View {
+        HStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(.blue)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Transcribing locally")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Text(audioSummaryText)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.56))
+
+                compactTranscriptionTimer
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                transcriber.stopTranscription()
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.red.opacity(0.90), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop transcription")
+            .pointingHandCursor()
+        }
+    }
+
+    private var resultCompactBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: copied ? "checkmark.circle.fill" : "doc.text.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(copied ? .green.opacity(0.94) : .white.opacity(0.72))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(copied ? "Text copied to clipboard" : "Transcription ready")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.93))
+
+                    Text(resultMetadataText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.50))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+            }
+
+            HStack(spacing: 8) {
+                Button("Full transcription") {
+                    isFullTranscriptionVisible = true
+                }
+                .buttonStyle(CompactActionButtonStyle(isProminent: true))
+                .pointingHandCursor()
+
+                Button("Copy again") {
+                    copyTranscript()
+                }
+                .buttonStyle(CompactActionButtonStyle(isProminent: false))
+                .pointingHandCursor()
+
+                Button("New recording") {
+                    clearTranscriptState()
+                }
+                .buttonStyle(CompactActionButtonStyle(isProminent: false))
+                .pointingHandCursor()
+            }
+        }
+    }
+
+    private var compactTranscriptionTimer: some View {
+        TimelineView(.periodic(from: transcriber.transcriptionStartedAt ?? .now, by: 0.2)) { timeline in
+            Text("Whisper \(formatRunSeconds(transcriptionElapsed(at: timeline.date)))")
+                .font(.system(.caption2, design: .monospaced).weight(.medium))
+                .foregroundStyle(.blue.opacity(0.90))
+        }
+    }
+
+    private func transcriptionElapsed(at date: Date) -> TimeInterval {
+        if transcriber.isTranscribing, let startedAt = transcriber.transcriptionStartedAt {
+            return max(0, date.timeIntervalSince(startedAt))
+        }
+        return transcriber.lastTranscriptionDuration ?? transcriber.currentTranscriptionElapsed
+    }
+
+    private func contentPadding(for presentation: RecorderWindowPresentation) -> EdgeInsets {
+        switch presentation {
+        case .expanded, .fullTranscript:
+            return EdgeInsets(top: 28, leading: 32, bottom: 28, trailing: 32)
+        case .recordingCompact:
+            return EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
+        case .transcriptionCompact, .resultCompact:
+            return EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
         }
     }
 
@@ -183,6 +407,26 @@ struct RecorderView: View {
         )
     }
 
+    @ViewBuilder
+    private var recordingMeters: some View {
+        if recordingMode == .meeting {
+            VStack(spacing: 8) {
+                MeetingLevelRow(
+                    title: "Person A · Mic",
+                    levels: recorder.levels,
+                    isRecording: recorder.isRecording
+                )
+                MeetingLevelRow(
+                    title: "Person B · System",
+                    levels: recorder.systemAudioLevels,
+                    isRecording: recorder.isRecording
+                )
+            }
+        } else {
+            WaveformView(levels: recorder.levels, isRecording: recorder.isRecording)
+        }
+    }
+
     private var controls: some View {
         HStack(spacing: 14) {
             Button {
@@ -217,9 +461,7 @@ struct RecorderView: View {
             .pointingHandCursor(!transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Button("Clear") {
-                transcriber.clearTranscript()
-                historyError = nil
-                copied = false
+                clearTranscriptState()
             }
             .buttonStyle(MinimalButtonStyle())
             .disabled(transcriber.transcript.isEmpty && transcriber.errorMessage == nil)
@@ -228,86 +470,90 @@ struct RecorderView: View {
     }
 
     private var transcriptionCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(Color(red: 0.72, green: 0.50, blue: 1.0).opacity(0.16))
-                    Image(systemName: "cpu")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.72, green: 0.50, blue: 1.0))
-                }
-                .frame(width: 36, height: 36)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                statusPill
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("whisper.cpp")
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.92))
+                Text(transcriptionCardTitle)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
 
-                    HStack(spacing: 6) {
-                        Text(transcriber.modelDescription)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.36))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-
-                        SourceLinkButton(
-                            kind: .github,
-                            url: SourceLinks.whisperCppGitHubURL,
-                            help: "Open whisper.cpp source on GitHub"
-                        )
-
-                        SourceLinkButton(
-                            kind: .huggingFace,
-                            url: SourceLinks.whisperCppHuggingFaceURL,
-                            help: "Open whisper.cpp GGML models on Hugging Face"
-                        )
-                    }
-                }
-
-                Spacer()
+                Spacer(minLength: 8)
 
                 if let detectedLanguageDisplay = transcriber.detectedLanguageDisplay {
                     languagePill(detectedLanguageDisplay)
                 }
 
-                statusPill
+                if hasTranscript {
+                    Button(isFullTranscriptionVisible ? "Hide transcription" : "Full transcription") {
+                        isFullTranscriptionVisible.toggle()
+                    }
+                    .buttonStyle(MinimalButtonStyle())
+                    .pointingHandCursor()
+                }
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                TranscriptionTimerText(
-                    startedAt: transcriber.transcriptionStartedAt,
-                    elapsed: transcriber.currentTranscriptionElapsed,
-                    finalDuration: transcriber.lastTranscriptionDuration,
-                    isActive: transcriber.isTranscribing
-                )
+            HStack(spacing: 8) {
+                if let availableAudioSummaryText {
+                    Text(availableAudioSummaryText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .lineLimit(1)
 
-                Text(transcriber.status.isActive ? "live" : transcriber.status.statusLabel)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(transcriber.status.statusColor)
+                    Text("·")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.24))
+                }
 
-                Spacer()
+                Text("Model \(transcriber.modelDescription)")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.34))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
-            TextEditor(text: $transcriber.transcript)
-                .font(.system(.body, design: .rounded))
-                .foregroundStyle(.white.opacity(0.88))
-                .scrollContentBackground(.hidden)
-                .padding(14)
-                .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.055), lineWidth: 1)
-                )
-                .frame(minHeight: 130)
+            if transcriber.isTranscribing {
+                compactTranscriptionTimer
+            } else if hasTranscript {
+                HStack(spacing: 8) {
+                    Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.clipboard")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(copied ? .green.opacity(0.90) : .white.opacity(0.56))
+
+                    Text(copied ? "Text copied to clipboard." : "Transcription is ready. Copy it or open the full text.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.58))
+
+                    Spacer()
+                }
+            } else {
+                Text("After transcription, Sussurro copies the text to your clipboard automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+
+            if isFullTranscriptionVisible {
+                TextEditor(text: $transcriber.transcript)
+                    .font(.system(.body, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .scrollContentBackground(.hidden)
+                    .padding(14)
+                    .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.055), lineWidth: 1)
+                    )
+                    .frame(minHeight: 150)
+            }
         }
-        .padding(20)
+        .padding(16)
         .background(cardBackground)
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(transcriber.status.isActive ? 0.14 : 0.08), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.24), radius: 18, y: 8)
+        .shadow(color: Color.black.opacity(0.18), radius: 14, y: 6)
     }
 
     private func languagePill(_ text: String) -> some View {
@@ -338,6 +584,33 @@ struct RecorderView: View {
             .fill(Color.white.opacity(0.045))
     }
 
+    @ViewBuilder
+    private var copyToastOverlay: some View {
+        if let copyToast {
+            HStack(spacing: 9) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.green.opacity(0.94))
+
+                Text(copyToast.message)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.90))
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(Color.black.opacity(0.46), in: Capsule(style: .continuous))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.28), radius: 14, y: 8)
+            .padding(.top, 18)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(copyToast.message)
+        }
+    }
+
     private var footer: some View {
         VStack(alignment: .leading, spacing: 5) {
             if let errorMessage = recorder.errorMessage ?? transcriber.errorMessage ?? historyError ?? recordingHistory.errorMessage ?? hotKeyError {
@@ -346,7 +619,7 @@ struct RecorderView: View {
                     .foregroundStyle(transcriber.isStoppingTranscription ? .white.opacity(0.48) : .red.opacity(0.95))
                     .fixedSize(horizontal: false, vertical: true)
             } else if let lastRecordingURL {
-                Text(lastRecordingURL.lastPathComponent)
+                Text(lastRecordingFooterText(for: lastRecordingURL))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .font(.caption2)
@@ -375,8 +648,8 @@ struct RecorderView: View {
 
     private var statusText: String {
         if recorder.isRecording { return recordingMode == .meeting ? "Recording meeting" : "Recording" }
-        if transcriber.isTranscribing { return "Transcribing locally with whisper.cpp" }
-        return recordingMode == .meeting ? "Ready · meeting mode · local" : "Ready · whisper.cpp · ⌘⌥M"
+        if transcriber.isTranscribing { return "Transcribing locally" }
+        return recordingMode == .meeting ? "Ready · meeting mode · local" : "Ready · local · ⌘⌥M"
     }
 
     private var recordButtonTitle: String {
@@ -443,6 +716,79 @@ struct RecorderView: View {
         isRecorderConfigurationDisabled
     }
 
+    private var hasTranscript: Bool {
+        !transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var windowPresentation: RecorderWindowPresentation {
+        if recorder.isRecording {
+            return .recordingCompact
+        }
+
+        if transcriber.isTranscribing {
+            return .transcriptionCompact
+        }
+
+        if hasTranscript, transcriber.status == .completed, !isFullTranscriptionVisible {
+            return .resultCompact
+        }
+
+        if isFullTranscriptionVisible {
+            return .fullTranscript
+        }
+
+        return .expanded
+    }
+
+    private var transcriptionCardTitle: String {
+        if transcriber.isTranscribing { return "Transcribing" }
+        if hasTranscript { return copied ? "Copied to clipboard" : "Transcript ready" }
+        return "Clipboard output"
+    }
+
+    private var availableAudioSummaryText: String? {
+        guard let recordingDetailsText else { return nil }
+        return "Audio \(recordingDetailsText)"
+    }
+
+    private var audioSummaryText: String {
+        availableAudioSummaryText ?? "Audio details unavailable"
+    }
+
+    private var recordingDetailsText: String? {
+        var parts: [String] = []
+
+        if let lastRecordingDuration {
+            parts.append(Self.formatAudioDuration(lastRecordingDuration))
+        }
+
+        if let lastRecordingByteCount {
+            parts.append(AudioFileMetadata.formattedFileSize(lastRecordingByteCount))
+        }
+
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " · ")
+    }
+
+    private var resultMetadataText: String {
+        var parts = [audioSummaryText]
+
+        if let lastTranscriptionDuration = transcriber.lastTranscriptionDuration {
+            parts.append("Whisper \(Self.formatSeconds(lastTranscriptionDuration))")
+        }
+
+        if let detectedLanguageDisplay = transcriber.detectedLanguageDisplay {
+            parts.append(detectedLanguageDisplay)
+        }
+
+        return parts.joined(separator: " · ")
+    }
+
+    private func lastRecordingFooterText(for url: URL) -> String {
+        guard let recordingDetailsText else { return url.lastPathComponent }
+        return "\(url.lastPathComponent) · \(recordingDetailsText)"
+    }
+
     private func openSettingsWindow() {
         SettingsWindowController.shared.show()
     }
@@ -481,11 +827,14 @@ struct RecorderView: View {
             do {
                 let recordedAudio = try await recorder.stopRecording()
                 lastRecordingURL = recordedAudio.primaryURL
+                lastRecordingByteCount = AudioFileMetadata.byteCount(for: recordedAudio)
+                lastRecordingDuration = AudioFileMetadata.duration(for: recordedAudio) ?? recorder.elapsedSeconds
+                isFullTranscriptionVisible = false
                 historyError = nil
                 recordingHistory.reload()
                 if await transcriber.transcribe(recording: recordedAudio) {
                     saveTranscriptionHistory(for: recordedAudio.primaryURL)
-                    copyTranscript()
+                    copyTranscript(autoMinimize: TranscriptionAutoMinimizePolicy.shouldAutoMinimize(after: recordedAudio))
                 } else {
                     saveTranscriptionHistory(for: recordedAudio.primaryURL)
                 }
@@ -494,18 +843,16 @@ struct RecorderView: View {
             }
         } else {
             historyError = nil
-            if recordingMode == .meeting {
-                guard MeetingPermissionPrompter.ensureScreenCapturePermission() else {
-                    recorder.errorMessage = "Meeting mode needs Screen & System Audio Recording permission before it can capture system audio."
-                    return
-                }
-            }
-
+            lastRecordingURL = nil
+            lastRecordingByteCount = nil
+            lastRecordingDuration = nil
+            isFullTranscriptionVisible = false
             await recorder.startRecording(mode: recordingMode)
             if recordingMode == .meeting, !recorder.isRecording, let errorMessage = recorder.errorMessage {
                 MeetingPermissionPrompter.showSystemAudioRecoveryPrompt(details: errorMessage)
             }
             copied = false
+            dismissCopyToast()
         }
     }
 
@@ -513,6 +860,7 @@ struct RecorderView: View {
         guard !isRetryDisabled else { return }
         historyError = nil
         copied = false
+        dismissCopyToast()
 
         guard FileManager.default.fileExists(atPath: recording.url.path) else {
             historyError = "That recording no longer exists. Refreshing recent audio."
@@ -521,10 +869,13 @@ struct RecorderView: View {
         }
 
         lastRecordingURL = recording.url
+        lastRecordingByteCount = recording.byteCount
+        lastRecordingDuration = AudioFileMetadata.duration(for: recording.url)
+        isFullTranscriptionVisible = false
         let modelPathOverride = selectedRetryModelPathOverride()
         if await transcriber.transcribe(audioURL: recording.url, modelPathOverride: modelPathOverride) {
             saveTranscriptionHistory(for: recording.url)
-            copyTranscript()
+            copyTranscript(autoMinimize: TranscriptionAutoMinimizePolicy.shouldAutoMinimizeAfterRetrying(recording))
         } else {
             saveTranscriptionHistory(for: recording.url)
         }
@@ -549,17 +900,71 @@ struct RecorderView: View {
         return retryModelOptions.first { $0.id == retryModelSelectionID }?.modelPath
     }
 
-    private func copyTranscript() {
+    private func copyTranscript(autoMinimize: Bool = false) {
         let text = transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         copied = true
+        showCopyToast(autoMinimize: autoMinimize)
+    }
+
+    private func showCopyToast(autoMinimize: Bool) {
+        copyToastTask?.cancel()
+
+        let toast = CopyToast(message: "Text copied to clipboard")
+        withAnimation(.easeInOut(duration: 0.18)) {
+            copyToast = toast
+        }
+
+        copyToastTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: autoMinimize ? 1_250_000_000 : 1_800_000_000)
+            guard !Task.isCancelled, copyToast?.id == toast.id else { return }
+
+            if autoMinimize {
+                minimizeWindow()
+            }
+
+            withAnimation(.easeOut(duration: 0.16)) {
+                if copyToast?.id == toast.id {
+                    copyToast = nil
+                }
+            }
+            copyToastTask = nil
+        }
+    }
+
+    private func dismissCopyToast() {
+        copyToastTask?.cancel()
+        copyToastTask = nil
+        withAnimation(.easeOut(duration: 0.12)) {
+            copyToast = nil
+        }
+    }
+
+    private func clearTranscriptState() {
+        transcriber.clearTranscript()
+        historyError = nil
+        copied = false
+        isFullTranscriptionVisible = false
+        dismissCopyToast()
     }
 
     private static func formatClock(_ seconds: TimeInterval) -> String {
         let totalSeconds = max(0, Int(seconds.rounded(.down)))
         return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+
+    private static func formatAudioDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.toNearestOrAwayFromZero)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let remainingSeconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%02d:%02d", minutes, remainingSeconds)
     }
 
     private static func formatSeconds(_ seconds: TimeInterval) -> String {
@@ -577,27 +982,42 @@ struct RecorderView: View {
     }
 }
 
-private struct TranscriptionTimerText: View {
-    let startedAt: Date?
-    let elapsed: TimeInterval
-    let finalDuration: TimeInterval?
-    let isActive: Bool
+enum TranscriptionAutoMinimizePolicy {
+    static func shouldAutoMinimize(after recording: RecordedAudio) -> Bool {
+        !recording.isMeetingRecording
+    }
+
+    static func shouldAutoMinimizeAfterRetrying(_ recording: RecordingHistoryEntry) -> Bool {
+        !recording.fileName.hasPrefix("meeting-")
+    }
+}
+
+private struct MeetingLevelRow: View {
+    let title: String
+    let levels: [Float]
+    let isRecording: Bool
 
     var body: some View {
-        TimelineView(.periodic(from: startedAt ?? .now, by: 0.1)) { timeline in
-            Text(formatRunSeconds(elapsed(at: timeline.date)))
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.96))
-        }
-    }
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.46))
+                .frame(width: 118, alignment: .leading)
 
-    private func elapsed(at date: Date) -> TimeInterval {
-        if isActive, let startedAt {
-            return max(0, date.timeIntervalSince(startedAt))
+            WaveformView(
+                levels: levels,
+                isRecording: isRecording,
+                height: 24,
+                horizontalPadding: 10,
+                verticalPadding: 6
+            )
         }
-        return finalDuration ?? elapsed
     }
+}
+
+private struct CopyToast: Equatable, Identifiable {
+    let id = UUID()
+    let message: String
 }
 
 private struct RecentAudioPopover: View {
@@ -889,6 +1309,30 @@ private struct MinimalButtonStyle: ButtonStyle {
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(configuration.isPressed ? Color.white.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct CompactActionButtonStyle: ButtonStyle {
+    let isProminent: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(isProminent ? .white.opacity(0.94) : .white.opacity(0.62))
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .background(backgroundColor(isPressed: configuration.isPressed), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Color.white.opacity(isProminent ? 0.11 : 0.06), lineWidth: 1)
+            )
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isProminent {
+            return isPressed ? Color.white.opacity(0.18) : Color.white.opacity(0.13)
+        }
+        return isPressed ? Color.white.opacity(0.10) : Color.white.opacity(0.045)
     }
 }
 

@@ -6,13 +6,20 @@ final class FloatingRecorderWindowController: NSWindowController {
     init(settings: AppSettings) {
         let recorder = AudioRecorder(settings: settings)
         let transcriber = WhisperTranscriber(settings: settings)
-        let contentView = RecorderView(recorder: recorder, transcriber: transcriber, settings: settings)
-
         let panel = FloatingRecorderPanel(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 680),
             styleMask: [.titled, .resizable, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
+        )
+        let contentView = RecorderView(
+            recorder: recorder,
+            transcriber: transcriber,
+            settings: settings,
+            applyWindowPresentation: { [weak panel] presentation in
+                panel?.applyPresentation(presentation)
+            },
+            minimizeWindow: { [weak panel] in panel?.miniaturize(nil) }
         )
 
         panel.title = "Sussurro"
@@ -22,7 +29,7 @@ final class FloatingRecorderWindowController: NSWindowController {
         panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.contentMinSize = NSSize(width: 640, height: 620)
+        panel.contentMinSize = RecorderWindowPresentation.expanded.contentSize
         panel.contentView = NSHostingView(rootView: contentView)
         panel.center()
 
@@ -47,4 +54,26 @@ final class FloatingRecorderWindowController: NSWindowController {
 final class FloatingRecorderPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    @MainActor
+    func applyPresentation(_ presentation: RecorderWindowPresentation) {
+        let contentSize = presentation.contentSize
+        contentMinSize = contentSize
+
+        let currentContentRect = contentRect(forFrameRect: frame)
+        guard abs(currentContentRect.width - contentSize.width) > 1
+            || abs(currentContentRect.height - contentSize.height) > 1
+        else {
+            return
+        }
+
+        let nextContentRect = NSRect(
+            x: currentContentRect.midX - contentSize.width / 2,
+            y: currentContentRect.maxY - contentSize.height,
+            width: contentSize.width,
+            height: contentSize.height
+        )
+        let nextFrame = frameRect(forContentRect: nextContentRect)
+        setFrame(nextFrame, display: true, animate: true)
+    }
 }
