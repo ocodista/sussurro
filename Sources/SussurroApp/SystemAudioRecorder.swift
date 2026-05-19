@@ -1,11 +1,11 @@
+import AudioToolbox
 import AVFoundation
-import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 
 final class SystemAudioRecorder: NSObject {
     enum RecorderError: LocalizedError {
-        case screenCapturePermissionDenied
+        case systemAudioPermissionDenied
         case noDisplayAvailable
         case writerSetupFailed(String)
         case captureFailed(String)
@@ -13,14 +13,14 @@ final class SystemAudioRecorder: NSObject {
 
         var errorDescription: String? {
             switch self {
-            case .screenCapturePermissionDenied:
-                return "Meeting mode needs Screen & System Audio Recording permission before it can capture system audio."
+            case .systemAudioPermissionDenied:
+                return "Meeting mode needs System Audio Recording permission before it can capture system audio."
             case .noDisplayAvailable:
                 return "Could not find a display for system audio capture."
             case let .writerSetupFailed(message):
                 return "Could not prepare system audio recording: \(message)"
             case let .captureFailed(message):
-                return "Could not capture system audio: \(message). Enable Screen Recording for Sussurro in System Settings → Privacy & Security → Screen & System Audio Recording, then restart Sussurro."
+                return "Could not capture system audio: \(message). Enable System Audio Recording for Sussurro in System Settings → Privacy & Security, then try again."
             case let .writerFailed(message):
                 return "Could not save system audio: \(message)"
             }
@@ -28,6 +28,7 @@ final class SystemAudioRecorder: NSObject {
     }
 
     private let outputURL: URL
+    private let levelHandler: (@Sendable (Float) -> Void)?
     private let sampleRate = 48_000
     private let channelCount = 2
     private let queue = DispatchQueue(label: "app.sussurro.system-audio-recorder")
@@ -40,8 +41,9 @@ final class SystemAudioRecorder: NSObject {
     private var didAppendAudio = false
     private var streamError: Error?
 
-    init(outputURL: URL) {
+    init(outputURL: URL, levelHandler: (@Sendable (Float) -> Void)? = nil) {
         self.outputURL = outputURL
+        self.levelHandler = levelHandler
         super.init()
     }
 
@@ -82,10 +84,8 @@ final class SystemAudioRecorder: NSObject {
         streamError = nil
 
         do {
-            guard CGPreflightScreenCaptureAccess() else {
-                throw RecorderError.screenCapturePermissionDenied
-            }
-
+            // System audio has its own TCC service. Screen capture preflight stays false when only
+            // System Audio Recording is granted, so let ScreenCaptureKit request/validate audio access.
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first else {
                 throw RecorderError.noDisplayAvailable
@@ -116,6 +116,9 @@ final class SystemAudioRecorder: NSObject {
 
             if let recorderError = error as? RecorderError {
                 throw recorderError
+            }
+            if Self.isSystemAudioPermissionError(error) {
+                throw RecorderError.systemAudioPermissionDenied
             }
             throw RecorderError.captureFailed(error.localizedDescription)
         }
@@ -182,6 +185,85 @@ final class SystemAudioRecorder: NSObject {
         return outputURL
     }
 
+    static func isSystemAudioPermissionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == SCStreamErrorDomain && nsError.code == SCStreamError.userDeclined.rawValue
+    }
+
+    static func rootMeanSquareLevel(for sampleBuffer: CMSampleBuffer) -> Float {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            return 0.02
+        }
+
+        let streamDescription = streamDescriptionPointer.pointee
+        guard streamDescription.mFormatID == kAudioFormatLinearPCM else { return 0.02 }
+
+        var bufferListSizeNeeded = 0
+        CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &bufferListSizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: nil
+        )
+        guard bufferListSizeNeeded > 0 else { return 0.02 }
+
+        let rawBufferList = UnsafeMutableRawPointer.allocate(
+            byteCount: bufferListSizeNeeded,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { rawBufferList.deallocate() }
+
+        let audioBufferList = rawBufferList.bindMemory(to: AudioBufferList.self, capacity: 1)
+        var blockBuffer: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: audioBufferList,
+            bufferListSize: bufferListSizeNeeded,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr else { return 0.02 }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        let level = rootMeanSquareLevel(for: buffers, streamDescription: streamDescription)
+        return min(1, max(0.02, level * 8))
+    }
+
+    private static func rootMeanSquareLevel(
+        for buffers: UnsafeMutableAudioBufferListPointer,
+        streamDescription: AudioStreamBasicDescription
+    ) -> Float {
+        guard streamDescription.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              streamDescription.mBitsPerChannel == 32 else {
+            return 0.02
+        }
+
+        var squaredSum: Float = 0
+        var sampleCount = 0
+        for buffer in buffers {
+            guard let data = buffer.mData else { continue }
+            let samples = data.assumingMemoryBound(to: Float.self)
+            let bufferSampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            guard bufferSampleCount > 0 else { continue }
+
+            for index in 0..<bufferSampleCount {
+                squaredSum += samples[index] * samples[index]
+            }
+            sampleCount += bufferSampleCount
+        }
+
+        guard sampleCount > 0 else { return 0.02 }
+        return sqrt(squaredSum / Float(sampleCount))
+    }
+
     private func rememberStreamError(_ error: Error) {
         lock.lock()
         streamError = error
@@ -214,6 +296,7 @@ extension SystemAudioRecorder: SCStreamOutput {
 
         if audioInput.append(sampleBuffer) {
             didAppendAudio = true
+            levelHandler?(Self.rootMeanSquareLevel(for: sampleBuffer))
         } else if let error = writer.error {
             rememberStreamError(error)
         }

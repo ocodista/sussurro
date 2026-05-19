@@ -36,7 +36,7 @@ cd sussurro
 scripts/install-app.sh
 ```
 
-`install-app.sh` builds bundled whisper.cpp, builds the app, and installs it to `/Applications/Sussurro.app` when possible. Otherwise, it installs to `~/Applications/Sussurro.app`. Building from source requires Xcode command line tools, Git, and CMake; running the built app does not require Homebrew.
+`install-app.sh` builds bundled whisper.cpp, builds the app, and installs it to `/Applications/Sussurro.app` when possible. Otherwise, it installs to `~/Applications/Sussurro.app`. It signs source builds with a stable local ad-hoc requirement so macOS privacy grants survive rebuilds. Building from source requires Xcode command line tools, Git, and CMake; running the built app does not require Homebrew.
 
 ### Open
 
@@ -86,7 +86,7 @@ Meeting mode records the microphone as **Person A** and local system audio as **
 ## Privacy and safety
 
 - Transcription runs locally through bundled `whisper.cpp`; Sussurro does not send audio or transcripts to an app server.
-- Meeting mode captures microphone and system audio locally. System audio capture may require macOS Screen Recording / System Audio permission.
+- Meeting mode captures microphone and system audio locally. System audio capture may require macOS System Audio Recording permission.
 - Recordings are stored locally in `~/Library/Application Support/Sussurro/Recordings/` until you delete them.
 - Successful transcripts are copied to the macOS clipboard, where other apps may be able to read them.
 - Transcript history is stored locally in SQLite at `~/Library/Application Support/Sussurro/history.sqlite` so you can review and retry previous audio.
@@ -127,6 +127,13 @@ Common fixes when building from source:
 ```bash
 scripts/install-deps.sh turbo
 scripts/build-app.sh
+```
+
+If Meeting mode says System Audio Recording is missing while Sussurro is enabled, reset the stale macOS privacy grant and grant it again:
+
+```bash
+tccutil reset AudioCapture com.ocodista.sussurro
+scripts/install-app.sh
 ```
 
 ## License

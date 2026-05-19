@@ -29,7 +29,8 @@ final class AudioRecorder: ObservableObject {
 
     @Published private(set) var isRecording = false
     @Published private(set) var elapsedSeconds: TimeInterval = 0
-    @Published private(set) var levels: [Float] = Array(repeating: 0.02, count: 72)
+    @Published private(set) var levels: [Float] = AudioRecorder.emptyLevels()
+    @Published private(set) var systemAudioLevels: [Float] = AudioRecorder.emptyLevels()
     @Published var errorMessage: String?
 
     private let settings: AppSettings
@@ -79,7 +80,11 @@ final class AudioRecorder: ObservableObject {
 
         do {
             if mode == .meeting, let targetSystemAudioURL = urls.systemAudioURL {
-                let recorder = SystemAudioRecorder(outputURL: targetSystemAudioURL)
+                let recorder = SystemAudioRecorder(outputURL: targetSystemAudioURL) { [weak self] level in
+                    Task { @MainActor in
+                        self?.pushSystemAudioLevel(level)
+                    }
+                }
                 try await recorder.start()
                 systemAudioRecorder = recorder
                 systemAudioURL = targetSystemAudioURL
@@ -101,7 +106,8 @@ final class AudioRecorder: ObservableObject {
             microphoneStartedAt = Date()
             startedAt = microphoneStartedAt
             elapsedSeconds = 0
-            levels = Array(repeating: 0.02, count: 72)
+            levels = Self.emptyLevels()
+            systemAudioLevels = Self.emptyLevels()
             errorMessage = nil
 
             inputNode.removeTap(onBus: 0)
@@ -270,10 +276,22 @@ final class AudioRecorder: ObservableObject {
         }
     }
 
+    private static func emptyLevels() -> [Float] {
+        Array(repeating: 0.02, count: 72)
+    }
+
     private func pushLevel(_ level: Float) {
-        levels.append(max(0.02, min(1, level)))
-        if levels.count > 72 {
-            levels.removeFirst(levels.count - 72)
+        push(level, into: &levels)
+    }
+
+    private func pushSystemAudioLevel(_ level: Float) {
+        push(level, into: &systemAudioLevels)
+    }
+
+    private func push(_ level: Float, into targetLevels: inout [Float]) {
+        targetLevels.append(max(0.02, min(1, level)))
+        if targetLevels.count > 72 {
+            targetLevels.removeFirst(targetLevels.count - 72)
         }
     }
 

@@ -79,9 +79,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if command -v codesign >/dev/null 2>&1; then
-  codesign --force --deep --sign - "$APP_DIR" >/dev/null
-fi
+"$ROOT/scripts/sign-app.sh" "$APP_DIR" "$BUNDLE_ID"
 
 echo "Built: $APP_DIR"
 echo "Open it with: open '$APP_DIR'"
