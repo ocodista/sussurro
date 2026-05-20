@@ -113,6 +113,8 @@ struct RecorderView: View {
 
     private var recordingCompactBody: some View {
         HStack(spacing: 12) {
+            mascotLogo(size: 42, showsStatusDot: false)
+
             compactRecordingMeters
 
             Button {
@@ -139,14 +141,14 @@ struct RecorderView: View {
                     levels: recorder.levels,
                     isRecording: recorder.isRecording,
                     height: 20,
-                    horizontalPadding: 8,
+                    horizontalPadding: 6,
                     verticalPadding: 5
                 )
                 WaveformView(
                     levels: recorder.systemAudioLevels,
                     isRecording: recorder.isRecording,
                     height: 20,
-                    horizontalPadding: 8,
+                    horizontalPadding: 6,
                     verticalPadding: 5
                 )
             }
@@ -158,7 +160,7 @@ struct RecorderView: View {
                 levels: recorder.levels,
                 isRecording: recorder.isRecording,
                 height: 48,
-                horizontalPadding: 10,
+                horizontalPadding: 6,
                 verticalPadding: 8
             )
             .frame(maxWidth: .infinity)
@@ -168,9 +170,7 @@ struct RecorderView: View {
 
     private var transcriptionCompactBody: some View {
         HStack(spacing: 14) {
-            ProgressView()
-                .controlSize(.small)
-                .tint(.blue)
+            mascotLogo(size: 42, showsStatusDot: false)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text("Transcribing locally")
@@ -209,7 +209,7 @@ struct RecorderView: View {
                     .foregroundStyle(copied ? .green.opacity(0.94) : .white.opacity(0.72))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(copied ? "Text copied to clipboard" : "Transcription ready")
+                    Text("Transcription ready")
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(.white.opacity(0.93))
 
@@ -262,11 +262,11 @@ struct RecorderView: View {
     private func contentPadding(for presentation: RecorderWindowPresentation) -> EdgeInsets {
         switch presentation {
         case .expanded, .fullTranscript:
-            return EdgeInsets(top: 28, leading: 32, bottom: 28, trailing: 32)
+            return EdgeInsets(top: 28, leading: 24, bottom: 28, trailing: 24)
         case .recordingCompact:
-            return EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16)
+            return EdgeInsets(top: 14, leading: 12, bottom: 14, trailing: 12)
         case .transcriptionCompact, .resultCompact:
-            return EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20)
+            return EdgeInsets(top: 18, leading: 16, bottom: 18, trailing: 16)
         }
     }
 
@@ -342,32 +342,8 @@ struct RecorderView: View {
         .pointingHandCursor()
     }
 
-    @ViewBuilder
     private var appLogo: some View {
-        if let logo = AppLogoImage.logo {
-            Image(nsImage: logo)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFill()
-                .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                )
-                .overlay(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 8, height: 8)
-                        .overlay(Circle().stroke(Color(red: 0.065, green: 0.067, blue: 0.078), lineWidth: 1.5))
-                        .shadow(color: statusColor.opacity(0.55), radius: recorder.isRecording ? 6 : 0)
-                }
-        } else {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-                .shadow(color: statusColor.opacity(0.55), radius: recorder.isRecording ? 6 : 0)
-        }
+        mascotLogo(size: 34)
     }
 
     private var recordingModePicker: some View {
@@ -398,7 +374,7 @@ struct RecorderView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
         .frame(height: 38)
         .background(Color.white.opacity(recordingMode == .meeting ? 0.065 : 0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
@@ -521,7 +497,7 @@ struct RecorderView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(copied ? .green.opacity(0.90) : .white.opacity(0.56))
 
-                    Text(copied ? "Text copied to clipboard." : "Transcription is ready. Copy it or open the full text.")
+                    Text("Open full text only if you need to review it.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.58))
 
@@ -538,7 +514,7 @@ struct RecorderView: View {
                     .font(.system(.body, design: .rounded))
                     .foregroundStyle(.white.opacity(0.88))
                     .scrollContentBackground(.hidden)
-                    .padding(14)
+                    .padding(12)
                     .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -547,7 +523,8 @@ struct RecorderView: View {
                     .frame(minHeight: 150)
             }
         }
-        .padding(16)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
         .background(cardBackground)
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -560,7 +537,7 @@ struct RecorderView: View {
         Text(text)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.white.opacity(0.70))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .frame(height: 24)
             .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
     }
@@ -574,7 +551,7 @@ struct RecorderView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(transcriber.status.statusColor)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 24)
         .background(transcriber.status.statusColor.opacity(0.11), in: Capsule(style: .continuous))
     }
@@ -720,6 +697,31 @@ struct RecorderView: View {
         !transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var mascotActivity: AudioReactiveDogActivity {
+        if recorder.isRecording { return .recording }
+        if transcriber.isTranscribing { return .transcribing }
+        return .idle
+    }
+
+    private var mascotAmplitude: Float {
+        guard recorder.isRecording else { return 0 }
+
+        let microphoneLevel = Self.recentPeak(in: recorder.levels)
+        guard recordingMode == .meeting else { return microphoneLevel }
+        return max(microphoneLevel, Self.recentPeak(in: recorder.systemAudioLevels))
+    }
+
+    private func mascotLogo(size: CGFloat, showsStatusDot: Bool = true) -> some View {
+        AudioReactiveDogLogo(
+            logo: AppLogoImage.logo,
+            activity: mascotActivity,
+            amplitude: mascotAmplitude,
+            statusColor: statusColor,
+            size: size,
+            showsStatusDot: showsStatusDot
+        )
+    }
+
     private var windowPresentation: RecorderWindowPresentation {
         if recorder.isRecording {
             return .recordingCompact
@@ -742,7 +744,7 @@ struct RecorderView: View {
 
     private var transcriptionCardTitle: String {
         if transcriber.isTranscribing { return "Transcribing" }
-        if hasTranscript { return copied ? "Copied to clipboard" : "Transcript ready" }
+        if hasTranscript { return "Transcript ready" }
         return "Clipboard output"
     }
 
@@ -948,6 +950,10 @@ struct RecorderView: View {
         copied = false
         isFullTranscriptionVisible = false
         dismissCopyToast()
+    }
+
+    private static func recentPeak(in levels: [Float]) -> Float {
+        levels.suffix(8).max() ?? 0.02
     }
 
     private static func formatClock(_ seconds: TimeInterval) -> String {
@@ -1319,7 +1325,7 @@ private struct CompactActionButtonStyle: ButtonStyle {
         configuration.label
             .font(.caption.weight(.semibold))
             .foregroundStyle(isProminent ? .white.opacity(0.94) : .white.opacity(0.62))
-            .padding(.horizontal, 11)
+            .padding(.horizontal, 9)
             .frame(height: 30)
             .background(backgroundColor(isPressed: configuration.isPressed), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay(

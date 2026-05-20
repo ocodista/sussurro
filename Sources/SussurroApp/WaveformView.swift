@@ -4,7 +4,7 @@ struct WaveformView: View {
     let levels: [Float]
     let isRecording: Bool
     var height: CGFloat = 56
-    var horizontalPadding: CGFloat = 14
+    var horizontalPadding: CGFloat = 10
     var verticalPadding: CGFloat = 10
 
     var body: some View {
