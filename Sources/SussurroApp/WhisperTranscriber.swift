@@ -364,6 +364,7 @@ final class WhisperTranscriber: ObservableObject {
             "-l", "auto",
             "-nt",
             "-np",
+            "-mc", "0",
             "-oj",
             "-of", outputBaseURL.path
         ]
