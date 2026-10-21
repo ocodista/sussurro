@@ -2,6 +2,7 @@ import Foundation
 
 enum RecordingMode: String, CaseIterable, Identifiable, Sendable {
     case dictation
+    case realTime
     case meeting
 
     var id: String { rawValue }
@@ -10,6 +11,8 @@ enum RecordingMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .dictation:
             return "Dictation"
+        case .realTime:
+            return "Real-time"
         case .meeting:
             return "Meeting"
         }
@@ -19,6 +22,8 @@ enum RecordingMode: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .dictation:
             return "Microphone only"
+        case .realTime:
+            return "Live mic transcript · breath-aware chunks"
         case .meeting:
             return "Mic + system audio · Person A/B"
         }

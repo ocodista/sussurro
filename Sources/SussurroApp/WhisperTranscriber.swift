@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SussurroCore
 
 struct WhisperTranscriptionSegment: Sendable, Equatable {
     let start: TimeInterval
@@ -50,10 +51,20 @@ final class WhisperTranscriber: ObservableObject {
     @Published private(set) var currentTranscriptionElapsed: TimeInterval = 0
     @Published private(set) var lastTranscriptionDuration: TimeInterval?
     @Published private(set) var lastUsedModelPath: String?
+    @Published private(set) var realTimePendingChunkCount = 0
+    @Published private(set) var realTimeProcessedChunkCount = 0
 
     private let settings: AppSettings
     private let processController = TranscriptionProcessController()
     private var transcriptionTimer: Timer?
+    private var realTimeChunkSink: RealTimeChunkSink?
+    private var realTimeContinuation: AsyncStream<RealTimeAudioChunk>.Continuation?
+    private var realTimeTask: Task<Void, Never>?
+    private var realTimeCompletedChunkTexts: [Int: String] = [:]
+    private var realTimeTranscriptParts: [String] = []
+    private var realTimeSessionDirectoryURLs: Set<URL> = []
+    private var realTimeNextTranscriptChunkIndex = 0
+    private var realTimeFailedChunkCount = 0
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -93,6 +104,98 @@ final class WhisperTranscriber: ObservableObject {
         }
 
         return await transcribeMeeting(recording: recording, modelPathOverride: modelPathOverride)
+    }
+
+    func startRealTimeTranscription(modelPathOverride: String? = nil) -> RealTimeChunkSink? {
+        guard !isTranscribing else { return nil }
+        guard let request = makeWhisperRequest(modelPathOverride: modelPathOverride) else { return nil }
+
+        let startedAt = Date()
+        var continuation: AsyncStream<RealTimeAudioChunk>.Continuation?
+        let stream = AsyncStream<RealTimeAudioChunk> { continuation = $0 }
+        guard let continuation else {
+            status = .failed
+            errorMessage = "Could not start real-time transcription."
+            return nil
+        }
+
+        processController.resetCancellation()
+        isTranscribing = true
+        isStoppingTranscription = false
+        status = .running
+        transcriptionStartedAt = startedAt
+        currentTranscriptionElapsed = 0
+        lastTranscriptionDuration = nil
+        lastUsedModelPath = request.modelPath
+        detectedLanguageCode = nil
+        transcript = ""
+        errorMessage = nil
+        resetRealTimeState()
+        let chunkSink = RealTimeChunkSink(continuation: continuation)
+        realTimeChunkSink = chunkSink
+        realTimeContinuation = continuation
+        startTranscriptionTimer(startedAt: startedAt)
+
+        let processController = processController
+        let transcriber = self
+        realTimeTask = Task.detached(priority: .userInitiated) { [request, stream, processController, transcriber] in
+            await Self.processRealTimeChunks(
+                stream: stream,
+                request: request,
+                processController: processController,
+                maxConcurrentTranscriptions: 2
+            ) { event in
+                await transcriber.handleRealTimeChunkEvent(event)
+            }
+        }
+
+        return chunkSink
+    }
+
+    func finishRealTimeTranscription() async -> Bool {
+        guard realTimeTask != nil || realTimeContinuation != nil else {
+            return status == .completed && !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        realTimeChunkSink?.finish()
+        realTimeChunkSink = nil
+        realTimeContinuation?.finish()
+        realTimeContinuation = nil
+        await realTimeTask?.value
+        realTimeTask = nil
+        cleanupRealTimeSessionDirectories()
+
+        let duration = transcriptionStartedAt.map { Date().timeIntervalSince($0) }
+        lastTranscriptionDuration = duration
+        currentTranscriptionElapsed = duration ?? currentTranscriptionElapsed
+        stopTranscriptionTimer()
+        transcriptionStartedAt = nil
+        realTimePendingChunkCount = 0
+
+        let wasStopping = isStoppingTranscription
+        isStoppingTranscription = false
+        isTranscribing = false
+
+        if wasStopping {
+            status = .stopped
+            errorMessage = "Transcription stopped."
+            return false
+        }
+
+        let cleanTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanTranscript.isEmpty, realTimeFailedChunkCount > 0 {
+            status = .failed
+            if errorMessage == nil {
+                errorMessage = "Real-time transcription failed for all audio chunks."
+            }
+            return false
+        }
+
+        status = .completed
+        if realTimeFailedChunkCount > 0 {
+            errorMessage = "Real-time transcription skipped \(realTimeFailedChunkCount) chunk(s)."
+        }
+        return !cleanTranscript.isEmpty
     }
 
     func transcribe(audioURL: URL, modelPathOverride: String? = nil) async -> Bool {
@@ -139,6 +242,11 @@ final class WhisperTranscriber: ObservableObject {
 
             detectedLanguageCode = result.languageCode
             transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            try? LastTranscriptionStore().save(TranscriptionRecord(
+                text: transcript,
+                language: detectedLanguageCode,
+                audioPath: audioURL.path
+            ))
             status = .completed
             return !transcript.isEmpty
         } catch TranscriptionCancellation.cancelled {
@@ -271,6 +379,11 @@ final class WhisperTranscriber: ObservableObject {
         guard isTranscribing else { return }
         isStoppingTranscription = true
         errorMessage = "Stopping transcription…"
+        realTimeChunkSink?.finish()
+        realTimeChunkSink = nil
+        realTimeContinuation?.finish()
+        realTimeContinuation = nil
+        realTimeTask?.cancel()
         processController.cancel()
     }
 
@@ -293,7 +406,101 @@ final class WhisperTranscriber: ObservableObject {
         detectedLanguageCode = nil
         transcriptionStartedAt = nil
         lastUsedModelPath = nil
+        realTimePendingChunkCount = 0
+        realTimeProcessedChunkCount = 0
+        resetRealTimeState()
         status = .idle
+    }
+
+    private func resetRealTimeState() {
+        realTimeCompletedChunkTexts = [:]
+        realTimeTranscriptParts = []
+        realTimeSessionDirectoryURLs = []
+        realTimeNextTranscriptChunkIndex = 0
+        realTimeFailedChunkCount = 0
+        realTimeProcessedChunkCount = 0
+        realTimePendingChunkCount = 0
+    }
+
+    private func handleRealTimeChunkEvent(_ event: RealTimeChunkEvent) {
+        switch event {
+        case let .queued(_, sessionDirectoryURL):
+            realTimeSessionDirectoryURLs.insert(sessionDirectoryURL)
+            realTimePendingChunkCount += 1
+            return
+        case let .completed(index, text, languageCode):
+            realTimeCompletedChunkTexts[index] = text
+            if detectedLanguageCode == nil {
+                detectedLanguageCode = languageCode
+            }
+        case let .failed(index, message):
+            realTimeCompletedChunkTexts[index] = ""
+            realTimeFailedChunkCount += 1
+            errorMessage = message
+        case let .cancelled(index):
+            realTimeCompletedChunkTexts[index] = ""
+        }
+
+        realTimeProcessedChunkCount += 1
+        realTimePendingChunkCount = max(0, realTimePendingChunkCount - 1)
+        appendReadyRealTimeChunks()
+    }
+
+    private func cleanupRealTimeSessionDirectories() {
+        for sessionDirectoryURL in realTimeSessionDirectoryURLs {
+            Self.removeRealTimeSessionDirectory(sessionDirectoryURL)
+        }
+        realTimeSessionDirectoryURLs = []
+    }
+
+    private func appendReadyRealTimeChunks() {
+        var didAppendChunk = false
+        while let chunkText = realTimeCompletedChunkTexts.removeValue(forKey: realTimeNextTranscriptChunkIndex) {
+            let cleanText = chunkText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanText.isEmpty {
+                let previousText = Self.realTimeTranscript(from: realTimeTranscriptParts)
+                let deduplicatedText = Self.removingRepeatedBoundaryWords(previousText: previousText, nextText: cleanText)
+                if !deduplicatedText.isEmpty {
+                    realTimeTranscriptParts.append(deduplicatedText)
+                    didAppendChunk = true
+                }
+            }
+            realTimeNextTranscriptChunkIndex += 1
+        }
+
+        guard didAppendChunk else { return }
+        transcript = Self.realTimeTranscript(from: realTimeTranscriptParts)
+    }
+
+    nonisolated static func realTimeTranscript(from chunkTexts: [String]) -> String {
+        chunkTexts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    nonisolated static func removingRepeatedBoundaryWords(previousText: String, nextText: String) -> String {
+        let cleanNextText = nextText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !previousText.isEmpty, !cleanNextText.isEmpty else { return cleanNextText }
+
+        let previousWords = previousText.split(whereSeparator: \.isWhitespace).map(String.init)
+        let nextWords = cleanNextText.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !previousWords.isEmpty, !nextWords.isEmpty else { return cleanNextText }
+
+        let maxOverlapWordCount = min(12, previousWords.count, nextWords.count)
+        for overlapWordCount in stride(from: maxOverlapWordCount, through: 1, by: -1) {
+            let previousSuffix = previousWords.suffix(overlapWordCount).map(Self.normalizedBoundaryWord)
+            let nextPrefix = nextWords.prefix(overlapWordCount).map(Self.normalizedBoundaryWord)
+            guard previousSuffix == nextPrefix else { continue }
+
+            return nextWords.dropFirst(overlapWordCount).joined(separator: " ")
+        }
+
+        return cleanNextText
+    }
+
+    nonisolated private static func normalizedBoundaryWord(_ word: String) -> String {
+        word.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.symbols))
     }
 
     private func makeWhisperRequest(modelPathOverride: String?) -> WhisperRequest? {
@@ -327,7 +534,11 @@ final class WhisperTranscriber: ObservableObject {
             return nil
         }
 
-        return WhisperRequest(whisperCLIPath: whisperCLIPath, modelPath: modelPath)
+        return WhisperRequest(
+            whisperCLIPath: whisperCLIPath,
+            modelPath: modelPath,
+            language: settings.transcriptionLanguage
+        )
     }
 
     private func startTranscriptionTimer(startedAt: Date) {
@@ -344,6 +555,85 @@ final class WhisperTranscriber: ObservableObject {
         transcriptionTimer = nil
     }
 
+    nonisolated private static func processRealTimeChunks(
+        stream: AsyncStream<RealTimeAudioChunk>,
+        request: WhisperRequest,
+        processController: TranscriptionProcessController,
+        maxConcurrentTranscriptions: Int,
+        emit: @escaping @Sendable (RealTimeChunkEvent) async -> Void
+    ) async {
+        let limiter = RealTimeTranscriptionLimiter(limit: maxConcurrentTranscriptions)
+
+        await withTaskGroup(of: Void.self) { group in
+            for await chunk in stream {
+                if Task.isCancelled {
+                    Self.removeRealTimeChunkArtifacts(for: chunk)
+                    break
+                }
+
+                await emit(.queued(index: chunk.index, sessionDirectoryURL: chunk.sessionDirectoryURL))
+                await limiter.acquire()
+                group.addTask(priority: .userInitiated) {
+                    let event = transcribeRealTimeChunk(
+                        chunk,
+                        request: request,
+                        processController: processController
+                    )
+                    await emit(event)
+                    await limiter.release()
+                }
+            }
+
+            if Task.isCancelled {
+                group.cancelAll()
+            }
+
+            await group.waitForAll()
+        }
+    }
+
+    nonisolated private static func transcribeRealTimeChunk(
+        _ chunk: RealTimeAudioChunk,
+        request: WhisperRequest,
+        processController: TranscriptionProcessController
+    ) -> RealTimeChunkEvent {
+        defer {
+            removeRealTimeChunkArtifacts(for: chunk)
+        }
+
+        do {
+            try processController.checkCancellation()
+            let normalizedAudioURL = try normalizedWAVURL(for: chunk.url, processController: processController)
+            defer { try? FileManager.default.removeItem(at: normalizedAudioURL) }
+
+            let result = try runWhisper(
+                audioURL: normalizedAudioURL,
+                request: request,
+                processController: processController,
+                diagnosticSource: "real_time_chunk_\(chunk.index)"
+            )
+            return .completed(index: chunk.index, text: realTimeTranscriptText(for: result, chunk: chunk), languageCode: result.languageCode)
+        } catch TranscriptionCancellation.cancelled {
+            return .cancelled(index: chunk.index)
+        } catch {
+            return .failed(index: chunk.index, message: "Real-time chunk \(chunk.index + 1) failed: \(error.localizedDescription)")
+        }
+    }
+
+    nonisolated private static func realTimeTranscriptText(for result: WhisperResult, chunk: RealTimeAudioChunk) -> String {
+        guard chunk.index > 0, chunk.overlapDuration > 0, !result.segments.isEmpty else {
+            return result.transcript
+        }
+
+        let overlapBoundary = chunk.overlapDuration + 0.05
+        let text = result.segments
+            .filter { $0.end > overlapBoundary }
+            .map(\.text)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? result.transcript : text
+    }
+
     nonisolated private static func runWhisper(
         audioURL: URL,
         request: WhisperRequest,
@@ -358,15 +648,12 @@ final class WhisperTranscriber: ObservableObject {
 
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = [
-            "-m", modelURL.path,
-            "-f", audioURL.path,
-            "-l", "auto",
-            "-nt",
-            "-np",
-            "-oj",
-            "-of", outputBaseURL.path
-        ]
+        process.arguments = whisperArguments(
+            modelPath: modelURL.path,
+            audioPath: audioURL.path,
+            language: request.language,
+            outputBasePath: outputBaseURL.path
+        )
 
         var environment = ProcessInfo.processInfo.environment
         if let whisperResourcesURL = AppPaths.whisperResourcesURL(forExecutableURL: executableURL) {
@@ -394,6 +681,20 @@ final class WhisperTranscriber: ObservableObject {
         }
 
         return WhisperResult(transcript: processResult.stdoutText, languageCode: languageCode, segments: segments)
+    }
+
+    nonisolated static func whisperArguments(
+        modelPath: String,
+        audioPath: String,
+        language: TranscriptionLanguage,
+        outputBasePath: String
+    ) -> [String] {
+        WhisperCommand.arguments(
+            modelPath: modelPath,
+            audioPath: audioPath,
+            language: language.whisperLanguageCode,
+            outputBasePath: outputBasePath
+        )
     }
 
     nonisolated private static func normalizedWAVURL(for inputURL: URL, processController: TranscriptionProcessController) throws -> URL {
@@ -565,6 +866,14 @@ final class WhisperTranscriber: ObservableObject {
         return text.replacingOccurrences(of: homePath, with: "~")
     }
 
+    nonisolated private static func removeRealTimeChunkArtifacts(for chunk: RealTimeAudioChunk) {
+        try? FileManager.default.removeItem(at: chunk.url)
+    }
+
+    nonisolated private static func removeRealTimeSessionDirectory(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+    }
+
     nonisolated private static func commandDisplayLine(executableURL: URL, arguments: [String]) -> String {
         ([executableURL.path] + arguments)
             .map(commandDisplayArgument(_:))
@@ -595,6 +904,7 @@ final class WhisperTranscriber: ObservableObject {
 private struct WhisperRequest: Sendable {
     let whisperCLIPath: String
     let modelPath: String
+    let language: TranscriptionLanguage
 }
 
 private struct WhisperResult: Sendable {
@@ -608,6 +918,81 @@ private struct MeetingAudioSource {
     let speakerName: String
     let diagnosticSource: String
     let startOffset: TimeInterval
+}
+
+final class RealTimeChunkSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncStream<RealTimeAudioChunk>.Continuation?
+    private var isFinished = false
+
+    init(continuation: AsyncStream<RealTimeAudioChunk>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func enqueue(_ chunk: RealTimeAudioChunk) {
+        lock.lock()
+        let continuation = isFinished ? nil : continuation
+        lock.unlock()
+
+        guard let continuation else {
+            try? FileManager.default.removeItem(at: chunk.url)
+            return
+        }
+
+        continuation.yield(chunk)
+    }
+
+    func finish() {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.finish()
+    }
+}
+
+private enum RealTimeChunkEvent: Sendable {
+    case queued(index: Int, sessionDirectoryURL: URL)
+    case completed(index: Int, text: String, languageCode: String?)
+    case failed(index: Int, message: String)
+    case cancelled(index: Int)
+}
+
+private actor RealTimeTranscriptionLimiter {
+    private let limit: Int
+    private var availableSlotCount: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+        availableSlotCount = self.limit
+    }
+
+    func acquire() async {
+        if availableSlotCount > 0 {
+            availableSlotCount -= 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            availableSlotCount = min(limit, availableSlotCount + 1)
+        } else {
+            let waiter = waiters.removeFirst()
+            waiter.resume()
+        }
+    }
 }
 
 private struct WhisperJSONResult: Decodable {
@@ -648,24 +1033,25 @@ private struct ProcessRunResult: Sendable {
 
 private final class TranscriptionProcessController: @unchecked Sendable {
     private let lock = NSLock()
-    private var currentProcess: Process?
+    private var currentProcesses: [ObjectIdentifier: Process] = [:]
     private var cancellationRequested = false
 
     func resetCancellation() {
         lock.lock()
         cancellationRequested = false
-        currentProcess = nil
+        currentProcesses = [:]
         lock.unlock()
     }
 
     func cancel() {
         lock.lock()
         cancellationRequested = true
-        let process = currentProcess
+        let processes = Array(currentProcesses.values)
         lock.unlock()
 
-        guard let process else { return }
-        terminate(process)
+        for process in processes {
+            terminate(process)
+        }
     }
 
     func checkCancellation() throws {
@@ -682,9 +1068,7 @@ private final class TranscriptionProcessController: @unchecked Sendable {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        lock.lock()
-        currentProcess = process
-        lock.unlock()
+        trackProcess(process)
 
         do {
             try checkCancellation()
@@ -707,11 +1091,15 @@ private final class TranscriptionProcessController: @unchecked Sendable {
         return ProcessRunResult(stdoutText: stdoutText, stderrText: stderrText, terminationStatus: terminationStatus, wasCancelled: wasCancelled)
     }
 
+    private func trackProcess(_ process: Process) {
+        lock.lock()
+        currentProcesses[ObjectIdentifier(process)] = process
+        lock.unlock()
+    }
+
     private func clearCurrentProcess(_ process: Process) {
         lock.lock()
-        if currentProcess === process {
-            currentProcess = nil
-        }
+        currentProcesses[ObjectIdentifier(process)] = nil
         lock.unlock()
     }
 

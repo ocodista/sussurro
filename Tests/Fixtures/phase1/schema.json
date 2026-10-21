@@ -1,0 +1,1 @@
+{"type":"object","properties":{"speaker":{"type":"string"},"minutes":{"type":"integer"},"approved":{"type":"boolean"}},"required":["speaker","minutes","approved"],"additionalProperties":false}

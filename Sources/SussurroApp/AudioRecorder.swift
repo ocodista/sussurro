@@ -31,6 +31,8 @@ final class AudioRecorder: ObservableObject {
     @Published private(set) var elapsedSeconds: TimeInterval = 0
     @Published private(set) var levels: [Float] = AudioRecorder.emptyLevels()
     @Published private(set) var systemAudioLevels: [Float] = AudioRecorder.emptyLevels()
+    @Published private(set) var realTimeBreathCount = 0
+    @Published private(set) var lastRealTimeBreathDetectedAt: Date?
     @Published var errorMessage: String?
 
     private let settings: AppSettings
@@ -42,6 +44,7 @@ final class AudioRecorder: ObservableObject {
     private var systemAudioRecorder: SystemAudioRecorder?
     private var systemAudioURL: URL?
     private var systemAudioStartedAt: Date?
+    private var realTimeChunkWriter: RealTimeAudioChunkWriter?
     private var startedAt: Date?
     private var timer: Timer?
 
@@ -68,7 +71,12 @@ final class AudioRecorder: ObservableObject {
         }
     }
 
-    func startRecording(mode: RecordingMode = .dictation) async {
+    func startRecording(
+        mode: RecordingMode = .dictation,
+        realTimeChunkInterval: TimeInterval? = nil,
+        onRealTimeChunk: (@Sendable (RealTimeAudioChunk) -> Void)? = nil,
+        onRealTimeChunkError: (@Sendable (String) -> Void)? = nil
+    ) async {
         guard !isRecording else { return }
         guard await requestMicrophoneAccess() else {
             errorMessage = RecorderError.microphoneDenied.localizedDescription
@@ -100,7 +108,15 @@ final class AudioRecorder: ObservableObject {
             }
 
             let file = try AVAudioFile(forWriting: urls.microphoneURL, settings: format.settings)
+            let chunkWriter = try makeRealTimeChunkWriter(
+                mode: mode,
+                format: format,
+                chunkInterval: realTimeChunkInterval,
+                onRealTimeChunk: onRealTimeChunk,
+                onRealTimeChunkError: onRealTimeChunkError
+            )
             audioFile = file
+            realTimeChunkWriter = chunkWriter
             recordingURL = urls.microphoneURL
             currentRecordingMode = mode
             microphoneStartedAt = Date()
@@ -108,10 +124,12 @@ final class AudioRecorder: ObservableObject {
             elapsedSeconds = 0
             levels = Self.emptyLevels()
             systemAudioLevels = Self.emptyLevels()
+            realTimeBreathCount = 0
+            lastRealTimeBreathDetectedAt = nil
             errorMessage = nil
 
             inputNode.removeTap(onBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, file] buffer, _ in
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, file, chunkWriter] buffer, _ in
                 do {
                     try file.write(from: buffer)
                 } catch {
@@ -119,6 +137,8 @@ final class AudioRecorder: ObservableObject {
                         self?.errorMessage = "Could not write microphone audio: \(error.localizedDescription)"
                     }
                 }
+
+                chunkWriter?.write(buffer)
 
                 let level = Self.rootMeanSquareLevel(for: buffer)
                 Task { @MainActor in
@@ -154,6 +174,8 @@ final class AudioRecorder: ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         audioFile = nil
+        realTimeChunkWriter?.finish()
+        realTimeChunkWriter = nil
         timer?.invalidate()
         timer = nil
         isRecording = false
@@ -193,11 +215,15 @@ final class AudioRecorder: ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         audioFile = nil
+        realTimeChunkWriter?.finish()
+        realTimeChunkWriter = nil
         timer?.invalidate()
         timer = nil
         isRecording = false
         recordingURL = nil
         microphoneStartedAt = nil
+        realTimeBreathCount = 0
+        lastRealTimeBreathDetectedAt = nil
         currentRecordingMode = .dictation
     }
 
@@ -205,6 +231,32 @@ final class AudioRecorder: ObservableObject {
         systemAudioRecorder = nil
         systemAudioURL = nil
         systemAudioStartedAt = nil
+    }
+
+    private func makeRealTimeChunkWriter(
+        mode: RecordingMode,
+        format: AVAudioFormat,
+        chunkInterval: TimeInterval?,
+        onRealTimeChunk: (@Sendable (RealTimeAudioChunk) -> Void)?,
+        onRealTimeChunkError: (@Sendable (String) -> Void)?
+    ) throws -> RealTimeAudioChunkWriter? {
+        guard mode == .realTime else { return nil }
+        guard let onRealTimeChunk else { return nil }
+
+        let sessionDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sussurro-realtime-\(UUID().uuidString)", isDirectory: true)
+        return try RealTimeAudioChunkWriter(
+            format: format,
+            chunkInterval: AppSettings.sanitizedRealTimeChunkIntervalSeconds(chunkInterval),
+            sessionDirectoryURL: sessionDirectoryURL,
+            onChunkReady: onRealTimeChunk,
+            onBreathDetected: { [weak self] _ in
+                Task { @MainActor in
+                    self?.recordRealTimeBreathDetection()
+                }
+            },
+            onError: onRealTimeChunkError ?? { _ in }
+        )
     }
 
     private func configureSelectedInputDevice(on inputNode: AVAudioInputNode) throws {
@@ -251,6 +303,11 @@ final class AudioRecorder: ObservableObject {
                 microphoneURL: AppPaths.recordingsDirectory.appendingPathComponent("recording-\(timestamp).wav"),
                 systemAudioURL: nil
             )
+        case .realTime:
+            return (
+                microphoneURL: AppPaths.recordingsDirectory.appendingPathComponent("realtime-\(timestamp).wav"),
+                systemAudioURL: nil
+            )
         case .meeting:
             let baseName = "meeting-\(timestamp)"
             return (
@@ -286,6 +343,11 @@ final class AudioRecorder: ObservableObject {
 
     private func pushSystemAudioLevel(_ level: Float) {
         push(level, into: &systemAudioLevels)
+    }
+
+    private func recordRealTimeBreathDetection() {
+        realTimeBreathCount += 1
+        lastRealTimeBreathDetectedAt = Date()
     }
 
     private func push(_ level: Float, into targetLevels: inout [Float]) {

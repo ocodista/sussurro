@@ -26,6 +26,8 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$ROOT/.build/$CONFIG/$APP_NAME" "$MACOS/$APP_NAME"
 chmod +x "$MACOS/$APP_NAME"
+cp "$ROOT/.build/$CONFIG/sussurro-mcp" "$MACOS/sussurro-mcp"
+chmod +x "$MACOS/sussurro-mcp"
 cp "$APP_RESOURCES/Sussurro.icns" "$RESOURCES/Sussurro.icns"
 cp "$APP_RESOURCES/sussurro-logo.png" "$RESOURCES/sussurro-logo.png"
 if [[ -x "$WHISPER_ARTIFACTS/whisper-cli" ]]; then

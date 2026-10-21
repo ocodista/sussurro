@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import SussurroCore
 import SwiftUI
 
 struct SettingsView: View {
@@ -7,6 +9,7 @@ struct SettingsView: View {
     @StateObject private var modelDownloader = ModelDownloadManager()
     @State private var selectedModelPreset = WhisperModelPreset.recommended
     @State private var showAdvancedPaths = false
+    @State private var localReadiness: LocalReadinessReport?
 
     private var setupStatus: AppSetupStatus {
         AppSetupStatus.current(settings: settings)
@@ -39,6 +42,7 @@ struct SettingsView: View {
                     setupNotice
                 }
 
+                readinessAndPrivacyCard
                 audioInputCard
                 transcriptionCard
                 advancedPathsCard
@@ -49,10 +53,16 @@ struct SettingsView: View {
             .frame(maxWidth: 700, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .frame(minWidth: 700, minHeight: 560)
+        .frame(minWidth: 700, minHeight: 640)
         .background(SettingsTheme.windowBackground)
         .preferredColorScheme(.dark)
-        .onAppear(perform: syncSelectedModelPreset)
+        .onAppear {
+            syncSelectedModelPreset()
+            refreshLocalReadiness()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshLocalReadiness()
+        }
     }
 
     private var header: some View {
@@ -150,6 +160,133 @@ struct SettingsView: View {
         return "Check the settings below."
     }
 
+    private var readinessAndPrivacyCard: some View {
+        SettingsSectionCard(
+            iconName: "lock.shield",
+            title: "Local readiness & privacy",
+            subtitle: "See what is ready before recording. Checks never open recordings or transcripts."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let report = localReadiness {
+                    HStack(spacing: 8) {
+                        capabilityBadge("Dictation", isReady: report.isDictationReady)
+                        capabilityBadge("Meeting", isReady: report.isMeetingReady)
+                        capabilityBadge("MCP", isReady: report.isMCPReady)
+                        Spacer()
+                        Button("Check Again", action: refreshLocalReadiness)
+                            .buttonStyle(SettingsSecondaryButtonStyle())
+                            .pointingHandCursor()
+                    }
+
+                    ForEach(report.items, id: \.id) { item in
+                        readinessRow(item)
+                    }
+
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "hand.raised.fill")
+                            .foregroundStyle(.green.opacity(0.9))
+                        Text(report.privacySummary + " Optional events contain only allowlisted operational status and are off unless explicitly enabled.")
+                            .font(.caption2)
+                            .foregroundStyle(SettingsTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(Color.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
+                    ProgressView("Checking local readiness…")
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func capabilityBadge(_ title: String, isReady: Bool) -> some View {
+        SettingsStatusBadge(
+            title: "\(title) \(isReady ? "ready" : "needs attention")",
+            systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+            color: isReady ? .green : .orange
+        )
+    }
+
+    private func readinessRow(_ item: ReadinessItem) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: item.status == .ready ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(item.status == .ready ? .green : .orange)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SettingsTheme.primaryText)
+                Text(item.detail)
+                    .font(.caption2)
+                    .foregroundStyle(SettingsTheme.tertiaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            if item.action != .none, let label = readinessActionLabel(item.action) {
+                Button(label) { performReadinessAction(item.action) }
+                    .buttonStyle(SettingsSecondaryButtonStyle())
+                    .pointingHandCursor()
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func readinessActionLabel(_ action: ReadinessAction) -> String? {
+        switch action {
+        case .none: return nil
+        case .requestMicrophone: return "Allow"
+        case .openMicrophoneSettings, .openSystemAudioSettings: return "Open Settings"
+        case .repairLocalTools: return "Reset Paths"
+        case .chooseOrDownloadModel: return selectedPresetIsAvailable ? "Use Model" : "Download"
+        case .reinstallApplication: return "Show App"
+        }
+    }
+
+    private func performReadinessAction(_ action: ReadinessAction) {
+        switch action {
+        case .none:
+            break
+        case .requestMicrophone:
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                Task { @MainActor in refreshLocalReadiness() }
+            }
+        case .openMicrophoneSettings:
+            openPrivacySettings("Privacy_Microphone")
+        case .openSystemAudioSettings:
+            if let url = MeetingPermissionPrompter.systemAudioSettingsURL {
+                NSWorkspace.shared.open(url)
+            }
+        case .repairLocalTools:
+            settings.resetPathsToDefaults()
+            syncSelectedModelPreset()
+            refreshLocalReadiness()
+        case .chooseOrDownloadModel:
+            if selectedPresetIsAvailable {
+                handlePrimaryModelAction()
+                refreshLocalReadiness()
+            } else {
+                modelDownloader.download(selectedModelPreset, settings: settings)
+            }
+        case .reinstallApplication:
+            NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+        }
+    }
+
+    private func openPrivacySettings(_ pane: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func refreshLocalReadiness() {
+        localReadiness = AppLocalReadiness.current(settings: settings)
+    }
+
     private var audioInputCard: some View {
         SettingsSectionCard(
             iconName: "mic",
@@ -236,9 +373,80 @@ struct SettingsView: View {
                     }
                 }
 
+                transcriptionLanguageRow
+                realTimeSettingsRow
                 downloadStateView
             }
         }
+    }
+
+    private var transcriptionLanguageRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().overlay(Color.white.opacity(0.06))
+
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Transcription language")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SettingsTheme.primaryText)
+
+                    Text("Choose Portuguese for more reliable short and real-time chunks. Automatic detection is better for mixed-language recordings.")
+                        .font(.caption2)
+                        .foregroundStyle(SettingsTheme.tertiaryText)
+                }
+
+                Spacer()
+
+                Picker("Transcription language", selection: $settings.transcriptionLanguage) {
+                    ForEach(TranscriptionLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 170)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+    }
+
+    private var realTimeSettingsRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().overlay(Color.white.opacity(0.06))
+
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Real-time breath detection")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SettingsTheme.primaryText)
+
+                    Text("Live mode transcribes at detected breaths or pauses. This is the max wait when no pause is found.")
+                        .font(.caption2)
+                        .foregroundStyle(SettingsTheme.tertiaryText)
+                }
+
+                Spacer()
+
+                Stepper(
+                    "Max \(realTimeIntervalText)",
+                    value: $settings.realTimeChunkIntervalSeconds,
+                    in: AppSettings.realTimeChunkIntervalRange,
+                    step: 1
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(SettingsTheme.secondaryText)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+    }
+
+    private var realTimeIntervalText: String {
+        let seconds = Int(settings.realTimeChunkIntervalSeconds.rounded(.toNearestOrAwayFromZero))
+        return "\(seconds)s"
     }
 
     private var advancedPathsCard: some View {

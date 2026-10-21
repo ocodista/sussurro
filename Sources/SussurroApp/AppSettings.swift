@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
+    nonisolated static let defaultRealTimeChunkIntervalSeconds: TimeInterval = 5
+    nonisolated static let realTimeChunkIntervalRange: ClosedRange<TimeInterval> = 2...30
 
     @Published var modelPath: String {
         didSet { save(modelPath, forKey: Self.modelPathKey) }
@@ -16,6 +18,14 @@ final class AppSettings: ObservableObject {
         didSet { save(selectedInputDeviceUID, forKey: Self.selectedInputDeviceUIDKey) }
     }
 
+    @Published var realTimeChunkIntervalSeconds: TimeInterval {
+        didSet { saveSanitizedRealTimeChunkInterval() }
+    }
+
+    @Published var transcriptionLanguage: TranscriptionLanguage {
+        didSet { save(transcriptionLanguage.rawValue, forKey: Self.transcriptionLanguageKey) }
+    }
+
     var expandedModelPath: String {
         AppPaths.expandedPath(modelPath.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -27,6 +37,8 @@ final class AppSettings: ObservableObject {
     private static let modelPathKey = "modelPath"
     private static let whisperCLIPathKey = "whisperCLIPath"
     private static let selectedInputDeviceUIDKey = "selectedInputDeviceUID"
+    private static let realTimeChunkIntervalSecondsKey = "realTimeChunkIntervalSeconds"
+    private static let transcriptionLanguageKey = "transcriptionLanguage"
     private static let didMigrateLegacyWhisperCLIPathKey = "didMigrateLegacyWhisperCLIPath"
 
     private let userDefaults: UserDefaults
@@ -44,12 +56,21 @@ final class AppSettings: ObservableObject {
         modelPath = resolvedModelPath
         whisperCLIPath = resolvedWhisperCLIPath.path
         selectedInputDeviceUID = userDefaults.string(forKey: Self.selectedInputDeviceUIDKey) ?? ""
+        realTimeChunkIntervalSeconds = Self.sanitizedRealTimeChunkIntervalSeconds(
+            userDefaults.object(forKey: Self.realTimeChunkIntervalSecondsKey) as? TimeInterval
+        )
+        transcriptionLanguage = userDefaults.string(forKey: Self.transcriptionLanguageKey)
+            .flatMap(TranscriptionLanguage.init(rawValue:))
+            ?? TranscriptionLanguage.defaultValue()
 
         if storedModelPath != resolvedModelPath {
             userDefaults.set(resolvedModelPath, forKey: Self.modelPathKey)
         }
         if storedWhisperCLIPath != resolvedWhisperCLIPath.path {
             userDefaults.set(resolvedWhisperCLIPath.path, forKey: Self.whisperCLIPathKey)
+        }
+        if (userDefaults.object(forKey: Self.realTimeChunkIntervalSecondsKey) as? TimeInterval) != realTimeChunkIntervalSeconds {
+            userDefaults.set(realTimeChunkIntervalSeconds, forKey: Self.realTimeChunkIntervalSecondsKey)
         }
         if resolvedWhisperCLIPath.didMigrateLegacyDefault {
             userDefaults.set(true, forKey: Self.didMigrateLegacyWhisperCLIPathKey)
@@ -63,6 +84,20 @@ final class AppSettings: ObservableObject {
 
     private func save(_ value: String, forKey key: String) {
         userDefaults.set(value, forKey: key)
+    }
+
+    private func saveSanitizedRealTimeChunkInterval() {
+        let sanitizedValue = Self.sanitizedRealTimeChunkIntervalSeconds(realTimeChunkIntervalSeconds)
+        guard sanitizedValue == realTimeChunkIntervalSeconds else {
+            realTimeChunkIntervalSeconds = sanitizedValue
+            return
+        }
+        userDefaults.set(sanitizedValue, forKey: Self.realTimeChunkIntervalSecondsKey)
+    }
+
+    nonisolated static func sanitizedRealTimeChunkIntervalSeconds(_ value: TimeInterval?) -> TimeInterval {
+        guard let value, value.isFinite else { return defaultRealTimeChunkIntervalSeconds }
+        return min(max(value, realTimeChunkIntervalRange.lowerBound), realTimeChunkIntervalRange.upperBound)
     }
 
     private static func resolvedModelPath(_ storedModelPath: String?) -> String {

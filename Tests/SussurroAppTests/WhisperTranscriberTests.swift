@@ -44,4 +44,32 @@ final class WhisperTranscriberTests: XCTestCase {
 
         XCTAssertEqual(transcript, "[00:01] Person A: Kept verbatim.")
     }
+
+    func testRealTimeTranscriptTrimsAndJoinsChunkTextInOrder() {
+        let transcript = WhisperTranscriber.realTimeTranscript(from: [
+            "  Hello",
+            " ",
+            "world.  "
+        ])
+
+        XCTAssertEqual(transcript, "Hello world.")
+    }
+
+    func testRealTimeBoundaryDeduplicationRemovesRepeatedOverlapWords() {
+        let nextText = WhisperTranscriber.removingRepeatedBoundaryWords(
+            previousText: "we need to keep every word at the boundary",
+            nextText: "word at the boundary without dropping anything new"
+        )
+
+        XCTAssertEqual(nextText, "without dropping anything new")
+    }
+
+    func testRealTimeBoundaryDeduplicationKeepsUnrelatedText() {
+        let nextText = WhisperTranscriber.removingRepeatedBoundaryWords(
+            previousText: "hello from the first chunk",
+            nextText: "this starts a new phrase"
+        )
+
+        XCTAssertEqual(nextText, "this starts a new phrase")
+    }
 }

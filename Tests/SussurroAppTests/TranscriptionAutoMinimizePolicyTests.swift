@@ -14,6 +14,18 @@ final class TranscriptionAutoMinimizePolicyTests: XCTestCase {
         XCTAssertFalse(TranscriptionAutoMinimizePolicy.shouldAutoMinimize(after: recording))
     }
 
+    func testRealTimeRecordingDoesNotAutoMinimizeAfterTranscription() {
+        let recording = RecordedAudio(
+            mode: .realTime,
+            microphoneURL: URL(fileURLWithPath: "/tmp/realtime.wav"),
+            systemAudioURL: nil,
+            microphoneStartedAt: Date(),
+            systemAudioStartedAt: nil
+        )
+
+        XCTAssertFalse(TranscriptionAutoMinimizePolicy.shouldAutoMinimize(after: recording))
+    }
+
     func testDictationRecordingAutoMinimizesAfterTranscription() {
         let recording = RecordedAudio(
             mode: .dictation,
@@ -29,6 +41,16 @@ final class TranscriptionAutoMinimizePolicyTests: XCTestCase {
     func testMeetingRetryDoesNotAutoMinimize() {
         let recording = RecordingHistoryEntry(
             url: URL(fileURLWithPath: "/tmp/meeting-2026-05-18_10-00-00-person-a-mic.wav"),
+            createdAt: Date(),
+            byteCount: 42
+        )
+
+        XCTAssertFalse(TranscriptionAutoMinimizePolicy.shouldAutoMinimizeAfterRetrying(recording))
+    }
+
+    func testRealTimeRetryDoesNotAutoMinimize() {
+        let recording = RecordingHistoryEntry(
+            url: URL(fileURLWithPath: "/tmp/realtime-2026-05-18_10-00-00.wav"),
             createdAt: Date(),
             byteCount: 42
         )

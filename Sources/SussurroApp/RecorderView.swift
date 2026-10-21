@@ -1,4 +1,5 @@
 import AppKit
+import SussurroCore
 import SwiftUI
 
 enum RecorderWindowPresentation: Equatable {
@@ -36,6 +37,7 @@ struct RecorderView: View {
     @State private var lastRecordingByteCount: Int64?
     @State private var lastRecordingDuration: TimeInterval?
     @State private var isFullTranscriptionVisible = false
+    @State private var isFinalRealTimeTranscriptionRunning = false
     @State private var retryModelSelectionID = RetryModelOption.currentID
     @State private var showHistoryPopover = false
     @State private var copied = false
@@ -348,7 +350,7 @@ struct RecorderView: View {
 
     private var recordingModePicker: some View {
         HStack(spacing: 10) {
-            Image(systemName: recordingMode == .meeting ? "person.2.wave.2.fill" : "text.quote")
+            Image(systemName: recordingModeIconName)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.50))
 
@@ -364,7 +366,7 @@ struct RecorderView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .controlSize(.small)
-            .frame(width: 190)
+            .frame(width: 260)
             .disabled(isRecorderConfigurationDisabled)
 
             Text(recordingMode.detail)
@@ -376,10 +378,10 @@ struct RecorderView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 38)
-        .background(Color.white.opacity(recordingMode == .meeting ? 0.065 : 0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.white.opacity(recordingMode == .dictation ? 0.045 : 0.065), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(recordingMode == .meeting ? 0.10 : 0.055), lineWidth: 1)
+                .stroke(Color.white.opacity(recordingMode == .dictation ? 0.055 : 0.10), lineWidth: 1)
         )
     }
 
@@ -414,7 +416,7 @@ struct RecorderView: View {
                 }
                 .font(.system(.body, design: .rounded).weight(.semibold))
                 .foregroundStyle(.white)
-                .frame(minWidth: recordingMode == .meeting ? 164 : 136, minHeight: 44)
+                .frame(minWidth: recordButtonMinWidth, minHeight: 44)
                 .background(recordButtonColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -440,8 +442,8 @@ struct RecorderView: View {
                 clearTranscriptState()
             }
             .buttonStyle(MinimalButtonStyle())
-            .disabled(transcriber.transcript.isEmpty && transcriber.errorMessage == nil)
-            .pointingHandCursor(!(transcriber.transcript.isEmpty && transcriber.errorMessage == nil))
+            .disabled(isClearDisabled)
+            .pointingHandCursor(!isClearDisabled)
         }
     }
 
@@ -461,7 +463,7 @@ struct RecorderView: View {
                     languagePill(detectedLanguageDisplay)
                 }
 
-                if hasTranscript {
+                if hasTranscript, !shouldShowRealTimeTranscriptPanel {
                     Button(isFullTranscriptionVisible ? "Hide transcription" : "Full transcription") {
                         isFullTranscriptionVisible.toggle()
                     }
@@ -489,7 +491,13 @@ struct RecorderView: View {
                     .truncationMode(.middle)
             }
 
-            if transcriber.isTranscribing {
+            if shouldShowRealTimeTranscriptPanel {
+                realTimeProgressRow
+                LiveTranscriptPanel(
+                    transcript: transcriber.transcript,
+                    placeholder: "Listening for breaths… transcript appears at natural pauses."
+                )
+            } else if transcriber.isTranscribing {
                 compactTranscriptionTimer
             } else if hasTranscript {
                 HStack(spacing: 8) {
@@ -509,7 +517,7 @@ struct RecorderView: View {
                     .foregroundStyle(.white.opacity(0.42))
             }
 
-            if isFullTranscriptionVisible {
+            if isFullTranscriptionVisible, !shouldShowRealTimeTranscriptPanel {
                 TextEditor(text: $transcriber.transcript)
                     .font(.system(.body, design: .rounded))
                     .foregroundStyle(.white.opacity(0.88))
@@ -531,6 +539,22 @@ struct RecorderView: View {
                 .stroke(Color.white.opacity(transcriber.status.isActive ? 0.14 : 0.08), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.18), radius: 14, y: 6)
+    }
+
+    private var realTimeProgressRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: realTimeProgressIconName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.blue.opacity(0.86))
+
+            Text(realTimeProgressText)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.56))
+
+            Spacer(minLength: 8)
+
+            compactTranscriptionTimer
+        }
     }
 
     private func languagePill(_ text: String) -> some View {
@@ -611,10 +635,14 @@ struct RecorderView: View {
     }
 
     private var idleFooterText: String {
-        if recordingMode == .meeting {
+        switch recordingMode {
+        case .dictation:
+            return "Space or ⌘⌥M to start, stop, or cancel"
+        case .realTime:
+            return "Real-time mode listens for breaths and transcribes at natural pauses."
+        case .meeting:
             return "Meeting mode records mic + system audio locally. Use headphones to reduce speaker bleed."
         }
-        return "Space or ⌘⌥M to start, stop, or cancel"
     }
 
     private var statusColor: Color {
@@ -624,21 +652,49 @@ struct RecorderView: View {
     }
 
     private var statusText: String {
-        if recorder.isRecording { return recordingMode == .meeting ? "Recording meeting" : "Recording" }
-        if transcriber.isTranscribing { return "Transcribing locally" }
-        return recordingMode == .meeting ? "Ready · meeting mode · local" : "Ready · local · ⌘⌥M"
+        if recorder.isRecording {
+            switch recordingMode {
+            case .dictation:
+                return "Recording"
+            case .realTime:
+                return "Recording live transcript"
+            case .meeting:
+                return "Recording meeting"
+            }
+        }
+        if transcriber.isTranscribing {
+            if isFinalRealTimeTranscriptionRunning { return "Finalizing full recording" }
+            return recordingMode == .realTime ? "Finishing live transcript" : "Transcribing locally"
+        }
+
+        switch recordingMode {
+        case .dictation:
+            return "Ready · local · ⌘⌥M"
+        case .realTime:
+            return "Ready · real-time · local"
+        case .meeting:
+            return "Ready · meeting mode · local"
+        }
     }
 
     private var recordButtonTitle: String {
         if recorder.isRecording { return "Stop" }
         if transcriber.isStoppingTranscription { return "Stopping" }
         if transcriber.isTranscribing { return "Stop" }
-        return recordingMode == .meeting ? "Start Meeting" : "Record"
+
+        switch recordingMode {
+        case .dictation:
+            return "Record"
+        case .realTime:
+            return "Start Live"
+        case .meeting:
+            return "Start Meeting"
+        }
     }
 
     private var recordButtonIcon: String {
         if recorder.isRecording || transcriber.isTranscribing { return "stop.fill" }
-        return recordingMode == .meeting ? "person.2.wave.2.fill" : "mic.fill"
+        return recordingModeIconName
     }
 
     private var recordButtonColor: Color {
@@ -647,8 +703,17 @@ struct RecorderView: View {
     }
 
     private var timingText: String {
+        if recorder.isRecording, recordingMode == .realTime {
+            return "record \(Self.formatClock(recorder.elapsedSeconds))  ·  breath-aware"
+        }
+
         if transcriber.isTranscribing {
-            return "whisper \(Self.formatSeconds(transcriber.currentTranscriptionElapsed))"
+            if isFinalRealTimeTranscriptionRunning {
+                return "full whisper \(Self.formatSeconds(transcriber.currentTranscriptionElapsed))"
+            }
+            return recordingMode == .realTime
+                ? "live \(Self.formatSeconds(transcriber.currentTranscriptionElapsed))"
+                : "whisper \(Self.formatSeconds(transcriber.currentTranscriptionElapsed))"
         }
 
         if let lastTranscriptionDuration = transcriber.lastTranscriptionDuration {
@@ -697,6 +762,67 @@ struct RecorderView: View {
         !transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var isClearDisabled: Bool {
+        isRecorderConfigurationDisabled || (transcriber.transcript.isEmpty && transcriber.errorMessage == nil)
+    }
+
+    private var shouldShowRealTimeTranscriptPanel: Bool {
+        recordingMode == .realTime && !isFinalRealTimeTranscriptionRunning && (recorder.isRecording || transcriber.isTranscribing)
+    }
+
+    private var realTimeProgressText: String {
+        if recorder.realTimeBreathCount > 0, transcriber.realTimePendingChunkCount > 0 {
+            let chunkLabel = transcriber.realTimePendingChunkCount == 1 ? "chunk" : "chunks"
+            return "\(realTimeBreathLabel) detected · transcribing \(transcriber.realTimePendingChunkCount) \(chunkLabel)"
+        }
+        if transcriber.realTimePendingChunkCount > 0 {
+            let chunkLabel = transcriber.realTimePendingChunkCount == 1 ? "chunk" : "chunks"
+            return "Processing \(transcriber.realTimePendingChunkCount) \(chunkLabel) · waiting for breath"
+        }
+        if recorder.realTimeBreathCount > 0 {
+            return "\(realTimeBreathLabel) detected · transcript updated at pause"
+        }
+        if transcriber.realTimeProcessedChunkCount > 0 {
+            return "Live transcript updated · listening for next breath"
+        }
+        return "Listening for breaths · max \(realTimeIntervalText)"
+    }
+
+    private var realTimeBreathLabel: String {
+        recorder.realTimeBreathCount == 1 ? "1 breath" : "\(recorder.realTimeBreathCount) breaths"
+    }
+
+    private var realTimeProgressIconName: String {
+        recorder.realTimeBreathCount > 0 ? "lungs.fill" : "waveform.path.ecg"
+    }
+
+    private var realTimeIntervalText: String {
+        let seconds = Int(settings.realTimeChunkIntervalSeconds.rounded(.toNearestOrAwayFromZero))
+        return "\(seconds)s"
+    }
+
+    private var recordingModeIconName: String {
+        switch recordingMode {
+        case .dictation:
+            return "mic.fill"
+        case .realTime:
+            return "captions.bubble.fill"
+        case .meeting:
+            return "person.2.wave.2.fill"
+        }
+    }
+
+    private var recordButtonMinWidth: CGFloat {
+        switch recordingMode {
+        case .dictation:
+            return 136
+        case .realTime:
+            return 150
+        case .meeting:
+            return 164
+        }
+    }
+
     private var mascotActivity: AudioReactiveDogActivity {
         if recorder.isRecording { return .recording }
         if transcriber.isTranscribing { return .transcribing }
@@ -724,11 +850,11 @@ struct RecorderView: View {
 
     private var windowPresentation: RecorderWindowPresentation {
         if recorder.isRecording {
-            return .recordingCompact
+            return recordingMode == .realTime ? .expanded : .recordingCompact
         }
 
         if transcriber.isTranscribing {
-            return .transcriptionCompact
+            return recordingMode == .realTime ? .expanded : .transcriptionCompact
         }
 
         if hasTranscript, transcriber.status == .completed, !isFullTranscriptionVisible {
@@ -743,6 +869,12 @@ struct RecorderView: View {
     }
 
     private var transcriptionCardTitle: String {
+        if isFinalRealTimeTranscriptionRunning {
+            return "Final transcription"
+        }
+        if recordingMode == .realTime, recorder.isRecording || transcriber.isTranscribing {
+            return "Live transcript"
+        }
         if transcriber.isTranscribing { return "Transcribing" }
         if hasTranscript { return "Transcript ready" }
         return "Clipboard output"
@@ -811,50 +943,94 @@ struct RecorderView: View {
     }
 
     private func handlePrimaryAction() async {
-        if transcriber.isTranscribing {
-            transcriber.stopTranscription()
-            return
-        }
-
         await toggleRecording()
     }
 
     private func toggleRecording() async {
+        if recorder.isRecording {
+            await stopActiveRecording()
+            return
+        }
+
         if transcriber.isTranscribing {
             transcriber.stopTranscription()
             return
         }
 
-        if recorder.isRecording {
-            do {
-                let recordedAudio = try await recorder.stopRecording()
-                lastRecordingURL = recordedAudio.primaryURL
-                lastRecordingByteCount = AudioFileMetadata.byteCount(for: recordedAudio)
-                lastRecordingDuration = AudioFileMetadata.duration(for: recordedAudio) ?? recorder.elapsedSeconds
-                isFullTranscriptionVisible = false
-                historyError = nil
-                recordingHistory.reload()
-                if await transcriber.transcribe(recording: recordedAudio) {
+        await startSelectedRecordingMode()
+    }
+
+    private func stopActiveRecording() async {
+        do {
+            let recordedAudio = try await recorder.stopRecording()
+            lastRecordingURL = recordedAudio.primaryURL
+            lastRecordingByteCount = AudioFileMetadata.byteCount(for: recordedAudio)
+            lastRecordingDuration = AudioFileMetadata.duration(for: recordedAudio) ?? recorder.elapsedSeconds
+            isFullTranscriptionVisible = false
+            historyError = nil
+            recordingHistory.reload()
+
+            if recordedAudio.mode == .realTime {
+                _ = await transcriber.finishRealTimeTranscription()
+                isFinalRealTimeTranscriptionRunning = true
+                let didTranscribeFullRecording = await transcriber.transcribe(audioURL: recordedAudio.primaryURL)
+                isFinalRealTimeTranscriptionRunning = false
+
+                if didTranscribeFullRecording {
                     saveTranscriptionHistory(for: recordedAudio.primaryURL)
                     copyTranscript(autoMinimize: TranscriptionAutoMinimizePolicy.shouldAutoMinimize(after: recordedAudio))
                 } else {
                     saveTranscriptionHistory(for: recordedAudio.primaryURL)
                 }
-            } catch {
-                recorder.errorMessage = error.localizedDescription
+                return
             }
-        } else {
-            historyError = nil
-            lastRecordingURL = nil
-            lastRecordingByteCount = nil
-            lastRecordingDuration = nil
-            isFullTranscriptionVisible = false
-            await recorder.startRecording(mode: recordingMode)
-            if recordingMode == .meeting, !recorder.isRecording, let errorMessage = recorder.errorMessage {
-                MeetingPermissionPrompter.showSystemAudioRecoveryPrompt(details: errorMessage)
+
+            if await transcriber.transcribe(recording: recordedAudio) {
+                saveTranscriptionHistory(for: recordedAudio.primaryURL)
+                copyTranscript(autoMinimize: TranscriptionAutoMinimizePolicy.shouldAutoMinimize(after: recordedAudio))
+            } else {
+                saveTranscriptionHistory(for: recordedAudio.primaryURL)
             }
-            copied = false
-            dismissCopyToast()
+        } catch {
+            recorder.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func startSelectedRecordingMode() async {
+        historyError = nil
+        isFinalRealTimeTranscriptionRunning = false
+        lastRecordingURL = nil
+        lastRecordingByteCount = nil
+        lastRecordingDuration = nil
+        isFullTranscriptionVisible = false
+        copied = false
+        dismissCopyToast()
+
+        if recordingMode == .realTime {
+            guard let chunkSink = transcriber.startRealTimeTranscription() else { return }
+            await recorder.startRecording(
+                mode: recordingMode,
+                realTimeChunkInterval: settings.realTimeChunkIntervalSeconds,
+                onRealTimeChunk: { chunk in
+                    chunkSink.enqueue(chunk)
+                },
+                onRealTimeChunkError: { [recorder] message in
+                    Task { @MainActor in
+                        recorder.errorMessage = message
+                    }
+                }
+            )
+
+            if !recorder.isRecording {
+                transcriber.stopTranscription()
+                _ = await transcriber.finishRealTimeTranscription()
+            }
+            return
+        }
+
+        await recorder.startRecording(mode: recordingMode)
+        if recordingMode == .meeting, !recorder.isRecording, let errorMessage = recorder.errorMessage {
+            MeetingPermissionPrompter.showSystemAudioRecoveryPrompt(details: errorMessage)
         }
     }
 
@@ -887,6 +1063,13 @@ struct RecorderView: View {
         let transcript = transcriber.status == .completed
             ? transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             : nil
+        if let transcript, !transcript.isEmpty {
+            try? LastTranscriptionStore().save(TranscriptionRecord(
+                text: transcript,
+                language: transcriber.detectedLanguageCode,
+                audioPath: audioURL.path
+            ))
+        }
         recordingHistory.updateTranscription(
             audioURL: audioURL,
             transcript: transcript,
@@ -947,6 +1130,7 @@ struct RecorderView: View {
     private func clearTranscriptState() {
         transcriber.clearTranscript()
         historyError = nil
+        isFinalRealTimeTranscriptionRunning = false
         copied = false
         isFullTranscriptionVisible = false
         dismissCopyToast()
@@ -990,11 +1174,119 @@ struct RecorderView: View {
 
 enum TranscriptionAutoMinimizePolicy {
     static func shouldAutoMinimize(after recording: RecordedAudio) -> Bool {
-        !recording.isMeetingRecording
+        recording.mode == .dictation
     }
 
     static func shouldAutoMinimizeAfterRetrying(_ recording: RecordingHistoryEntry) -> Bool {
-        !recording.fileName.hasPrefix("meeting-")
+        !recording.fileName.hasPrefix("meeting-") && !recording.fileName.hasPrefix("realtime-")
+    }
+}
+
+enum LiveTypingAnimationPolicy {
+    static let revealAnimationDuration = 0.08
+
+    static func startingText(displayedText: String, targetText: String) -> String {
+        guard !displayedText.isEmpty, !targetText.isEmpty else { return "" }
+        if targetText.hasPrefix(displayedText) {
+            return displayedText
+        }
+        return commonPrefix(displayedText, targetText)
+    }
+
+    private static func commonPrefix(_ lhs: String, _ rhs: String) -> String {
+        var prefix = ""
+        var lhsIndex = lhs.startIndex
+        var rhsIndex = rhs.startIndex
+
+        while lhsIndex < lhs.endIndex, rhsIndex < rhs.endIndex, lhs[lhsIndex] == rhs[rhsIndex] {
+            prefix.append(lhs[lhsIndex])
+            lhsIndex = lhs.index(after: lhsIndex)
+            rhsIndex = rhs.index(after: rhsIndex)
+        }
+
+        return prefix
+    }
+}
+
+private struct LiveTranscriptPanel: View {
+    let transcript: String
+    let placeholder: String
+
+    @State private var displayedTranscript = ""
+    @State private var isTyping = false
+
+    private let bottomAnchorID = "live-transcript-bottom"
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(displayText)
+                        .font(.system(.body, design: .rounded))
+                        .foregroundStyle(isShowingPlaceholder ? .white.opacity(0.34) : .white.opacity(0.88))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(bottomAnchorID)
+                }
+                .padding(12)
+            }
+            .frame(minHeight: 150, maxHeight: 180)
+            .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.055), lineWidth: 1)
+            )
+            .onAppear {
+                startTyping(to: transcript)
+            }
+            .onChange(of: transcript) { newTranscript in
+                startTyping(to: newTranscript)
+            }
+            .onChange(of: displayedTranscript) { _ in
+                withAnimation(.easeOut(duration: 0.16)) {
+                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    private var displayText: String {
+        if displayedTranscript.isEmpty {
+            return placeholder
+        }
+        return isTyping ? displayedTranscript + "▌" : displayedTranscript
+    }
+
+    private var isShowingPlaceholder: Bool {
+        displayedTranscript.isEmpty && transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func startTyping(to transcript: String) {
+        let cleanTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTranscript.isEmpty else {
+            displayedTranscript = ""
+            isTyping = false
+            return
+        }
+
+        let startingText = LiveTypingAnimationPolicy.startingText(
+            displayedText: displayedTranscript,
+            targetText: cleanTranscript
+        )
+        let shouldAnimateTyping = startingText != cleanTranscript
+
+        if shouldAnimateTyping {
+            withAnimation(.easeOut(duration: LiveTypingAnimationPolicy.revealAnimationDuration)) {
+                displayedTranscript = cleanTranscript
+            }
+        } else {
+            displayedTranscript = cleanTranscript
+        }
+
+        isTyping = true
     }
 }
 
@@ -1191,10 +1483,14 @@ private struct RecentAudioRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button("Retry", action: retry)
-                .buttonStyle(PopoverRetryButtonStyle())
-                .disabled(isRetryDisabled)
-                .pointingHandCursor(!isRetryDisabled)
+            Button(action: retry) {
+                Image(systemName: "arrow.clockwise.circle")
+            }
+            .buttonStyle(PopoverIconButtonStyle())
+            .disabled(isRetryDisabled)
+            .accessibilityLabel("Retry transcription for \(recording.fileName)")
+            .help("Retry transcription")
+            .pointingHandCursor(!isRetryDisabled)
 
             Button(action: reveal) {
                 Image(systemName: "arrow.up.forward.square")
@@ -1288,21 +1584,6 @@ private struct PopoverIconButtonStyle: ButtonStyle {
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(Color.white.opacity(0.06), lineWidth: 1)
-            )
-    }
-}
-
-private struct PopoverRetryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.78))
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background(configuration.isPressed ? Color.white.opacity(0.13) : Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
     }
 }
